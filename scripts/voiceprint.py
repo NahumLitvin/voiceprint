@@ -333,7 +333,6 @@ def substitutions(cmd):
         if c == "#" and outer is None and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
             end = cmd.find("\n", i)
             end = len(cmd) if end < 0 else end
-            flat.append(cmd[i:end])
             i = end
             continue
         if c == "'" and outer != '"' or c == '"' and outer != "'":
@@ -383,6 +382,7 @@ def bash_parts(cmd, cwd, written=None, depth=0):
     try:
         lex = shlex.shlex(flat, posix=True, punctuation_chars="();<>|&\n")
         lex.whitespace = " \t\r"
+        lex.commenters = ""
         lex.whitespace_split = True
         toks = []
         for token in lex:
@@ -791,6 +791,10 @@ def selftest():
         commented = "# Don't push yet\ngh pr create --title t --body \"$(cat <<'EOF'\n" + ai + "\nEOF\n)\""
         assert ai in (b(commented, cwd=td2) or ""), "an apostrophe in a comment must not hide the body"
         assert ai in (b("# don't forget\ngh pr comment 1 --body \"$(cat body.txt)\"", cwd=td2) or "")
+        assert b("git status # x\ngh pr comment 1 --body hello", cwd=td2) == "hello"
+        assert b("cd /tmp  # go\ngit commit -m hello", cwd=td2) == "hello"
+        assert b("echo https://x.io/a#frag && git commit -m hi", cwd=td2) == "hi"
+        assert b("git commit -m 'a # b'", cwd=td2) == "a # b"
         if hasattr(os, "mkfifo"):
             os.mkfifo(os.path.join(td2, "fifo"))
             assert b("gh pr comment 1 --body-file fifo", cwd=td2) is None
