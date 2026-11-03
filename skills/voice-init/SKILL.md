@@ -5,22 +5,22 @@ description: Build the user's own writing voice from their own publications and 
 
 # voice-init
 
-Builds the user's voice from text they wrote. Everything stays on their machine in `~/.voiceprint/` (or `$VOICEPRINT_HOME`). Never upload, commit or quote the corpus anywhere else.
+Builds the user's voice from text they wrote. Files are stored in `${VOICEPRINT_HOME:-~/.voiceprint}`, called HOME below. Never upload, commit or quote the corpus anywhere else. Tell the user up front that samples you read pass through this conversation, then start with `mkdir -p "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus"`.
 
 ## 1. Find sources, ask, then collect
 
 First look at what this machine can reach, without reading any content yet: connected MCP tools (Slack, Gmail, Telegram, WhatsApp, Discord, Notion), CLIs on PATH (`gh`, a session-search tool such as `recall`), Claude Code transcripts in `~/.claude/projects/`, and export files the user mentions. Ask for their handles on public sites.
 
-Show the user one menu of what you found and what each would collect, and get an explicit yes per source. Collect nothing they did not approve.
+Show the user one menu of what you found and what each would collect, and get an explicit yes per source. Collect nothing they did not approve. Before measuring, show a few lines from each source so they can drop what isn't theirs (quotes, forwarded mail, pasted AI text, secrets).
 
 Rules for every source:
 - Only text the user wrote. Never save other people's messages, even from a chat they were in.
 - Skip what they pasted or had AI draft, when they can point to it.
-- Save plain text under `~/.voiceprint/corpus/<source>/`: one `.md` per post for long form, one message per line in a `.txt` for chat.
+- Save plain text under `HOME/corpus/<source>/` (create the folder first): one `.md` per post for long form, one message per line in a `.txt` for chat.
 
 | Source | How |
 |---|---|
-| Claude Code prompts | `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" claude-prompts > ~/.voiceprint/corpus/claude/prompts.txt` (their most casual register) |
+| Claude Code prompts | `mkdir -p HOME/corpus/claude && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" claude-prompts > HOME/corpus/claude/prompts.txt` (their most casual register; code, long pastes and multi-line blocks are already dropped) |
 | Past sessions | If a session-search CLI like `recall` is installed, search their own messages with it |
 | Blog, Medium, dev.to, Substack | The posts they name or the RSS feed; dev.to has `https://dev.to/api/articles?username=<name>` |
 | LinkedIn | Their data export (Settings, Data privacy, Get a copy of your data) has `Shares.csv` and `Comments.csv` |
@@ -40,14 +40,14 @@ Keep long form and chat in separate folders: they are different registers. Some 
 ## 2. Measure
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" build ~/.voiceprint/corpus/posts ~/.voiceprint/corpus/prs
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" build "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus/posts" "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus/prs"
 ```
 
 For a chat folder add `--lines` and build it separately into its own home, for example `VOICEPRINT_HOME=~/.voiceprint/chat`. The output is `baseline.json`: sentence lengths, short-message share, dash, emoji, contraction and sign-off rates, which AI-tell words they actually use, and the warn and deny lines the guard uses.
 
 ## 3. Write the profile
 
-Read 20 to 30 samples across sources, then write `~/.voiceprint/profile.md` with these sections, each backed by numbers from `baseline.json` or quotes from the samples:
+Read 20 to 30 samples across sources, then write `HOME/profile.md` with these sections, each backed by numbers from `baseline.json` or quotes from the samples:
 
 - **Rhythm**: sentence and message length, how paragraphs open and close.
 - **Punctuation and marks**: what they use and what they never use (dashes, `!`, emoji, lowercase starts).
