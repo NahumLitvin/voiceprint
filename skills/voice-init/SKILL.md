@@ -7,19 +7,35 @@ description: Build the user's own writing voice from their own publications and 
 
 Builds the user's voice from text they wrote. Everything stays on their machine in `~/.voiceprint/` (or `$VOICEPRINT_HOME`). Never upload, commit or quote the corpus anywhere else.
 
-## 1. Collect their writing
+## 1. Find sources, ask, then collect
 
-Ask which sources they want, then save each as plain text under `~/.voiceprint/corpus/<source>/`. Only text the user wrote themselves. Skip anything quoted, pasted or AI-drafted they can point to.
+First look at what this machine can reach, without reading any content yet: connected MCP tools (Slack, Gmail, Telegram, WhatsApp, Discord, Notion), CLIs on PATH (`gh`, a session-search tool such as `recall`), Claude Code transcripts in `~/.claude/projects/`, and export files the user mentions. Ask for their handles on public sites.
+
+Show the user one menu of what you found and what each would collect, and get an explicit yes per source. Collect nothing they did not approve.
+
+Rules for every source:
+- Only text the user wrote. Never save other people's messages, even from a chat they were in.
+- Skip what they pasted or had AI draft, when they can point to it.
+- Save plain text under `~/.voiceprint/corpus/<source>/`: one `.md` per post for long form, one message per line in a `.txt` for chat.
 
 | Source | How |
 |---|---|
-| Blog, Medium, dev.to | Fetch each post they name (or the RSS feed), save the body as one `.md` per post |
-| LinkedIn | Their data export (Settings, Data privacy, Get a copy) has `Shares.csv`; save one post per file |
-| GitHub | `gh search prs --author=@me --limit 200 --json body --jq '.[].body'`, one file per body, drop bot templates |
-| Chat (Slack, WhatsApp, Discord export) | Their own messages only, one message per line in a `.txt` |
+| Claude Code prompts | `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" claude-prompts > ~/.voiceprint/corpus/claude/prompts.txt` (their most casual register) |
+| Past sessions | If a session-search CLI like `recall` is installed, search their own messages with it |
+| Blog, Medium, dev.to, Substack | The posts they name or the RSS feed; dev.to has `https://dev.to/api/articles?username=<name>` |
+| LinkedIn | Their data export (Settings, Data privacy, Get a copy of your data) has `Shares.csv` and `Comments.csv` |
+| Reddit | `https://www.reddit.com/user/<name>/comments.json?limit=100` and `submitted.json`, paging with `after` |
+| Hacker News | `https://hn.algolia.com/api/v1/search_by_date?tags=comment,author_<name>&hitsPerPage=1000` |
+| X / Twitter | Their archive's `data/tweets.js`, without retweets |
+| Bluesky, Mastodon | Their public author feed through the site's API |
+| GitHub | `gh search prs --author=@me --limit 200 --json body --jq '.[].body'`, plus issue comments; drop bot templates |
+| Slack, Gmail, Notion | The connected MCP tool, searching only what they sent (`from:me`, Sent mail) |
+| Telegram | Telegram Desktop, Export chat history, JSON; keep messages whose `from_id` is theirs, or use the MCP tool if connected |
+| WhatsApp | The chat export `.txt`, or the MCP tool if connected; keep only their lines |
+| Discord | Their data package, `messages/*/messages.json` |
 | Anything else | A folder of `.md` or `.txt` they point to |
 
-Keep long-form and chat in separate folders: they are different registers.
+Keep long form and chat in separate folders: they are different registers. Some sources are work data. Ask before mixing work chat into a voice they will use for personal writing.
 
 ## 2. Measure
 

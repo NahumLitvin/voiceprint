@@ -14,7 +14,7 @@ claude plugin marketplace add NahumLitvin/voiceprint && claude plugin install vo
 
 | Command | What it does |
 |---|---|
-| `/voice-init` | Collects your writing (blog, LinkedIn export, your GitHub PRs, chat exports), measures it, and writes `~/.voiceprint/profile.md` with you |
+| `/voice-init` | Finds where you write (blog, LinkedIn, Reddit, HN, GitHub, Slack, Telegram, WhatsApp, your Claude Code prompts), asks which to use, collects only your own text, measures it, and writes `~/.voiceprint/profile.md` with you |
 | `/voice` | Drafts in your voice and scores the draft before showing it |
 | the hook | Runs before `gh pr/issue create, comment, edit, review`, `git commit` and Slack tools. Warns when the text scores above your own writing |
 

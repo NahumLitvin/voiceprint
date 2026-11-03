@@ -3,10 +3,11 @@
 
   voiceprint.py build PATH... [--lines]   fingerprint your writing into $VOICEPRINT_HOME (default ~/.voiceprint)
   voiceprint.py score [FILE|-]            score a draft against your baseline
+  voiceprint.py claude-prompts            print what you typed to Claude Code, one prompt per line
   voiceprint.py hook                      Claude Code PreToolUse hook (reads the tool call on stdin)
   voiceprint.py selftest
 """
-import json, os, re, shlex, statistics, sys
+import glob, json, os, re, shlex, statistics, sys
 
 HOME = os.path.expanduser(os.environ.get("VOICEPRINT_HOME", "~/.voiceprint"))
 BASELINE = os.path.join(HOME, "baseline.json")
@@ -110,6 +111,21 @@ def build(paths, lines=False):
     return base
 
 
+def claude_prompts(root="~/.claude/projects"):
+    """What the user typed to Claude Code: their most casual written register."""
+    for f in sorted(glob.glob(os.path.join(os.path.expanduser(root), "*", "*.jsonl"))):
+        for line in open(f, errors="ignore"):
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            c = (e.get("message") or {}).get("content")
+            if e.get("type") == "user" and isinstance(c, str) and not c.lstrip().startswith(("<", "[", "Caveat:")):
+                c = " ".join(c.split())
+                if 2 <= len(c.split()) <= 300:
+                    yield c
+
+
 def load():
     return json.load(open(BASELINE)) if os.path.exists(BASELINE) else None
 
@@ -187,6 +203,12 @@ if __name__ == "__main__":
         t = sys.stdin.read() if len(a) < 2 or a[1] == "-" else open(a[1]).read()
         s, hits = score(t, load())
         print(json.dumps({"score": s, "hits": hits, "warn_at": (load() or {}).get("warn", 1.0)}))
+    elif a[0] == "claude-prompts":
+        seen = set()
+        for p in claude_prompts():
+            if p not in seen:
+                seen.add(p)
+                print(p)
     elif a[0] == "hook":
         hook()
     elif a[0] == "selftest":
