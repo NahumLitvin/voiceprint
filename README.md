@@ -40,4 +40,10 @@ python3 scripts/voiceprint.py build ~/my-posts && python3 scripts/voiceprint.py 
 
 Python 3.8+, standard library only, macOS, Linux and Windows (the hook needs `python3` on PATH). `python3 scripts/voiceprint.py selftest` runs the checks.
 
+
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately, see [SECURITY.md](SECURITY.md).
+
 MIT license.
