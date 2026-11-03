@@ -20,7 +20,7 @@ Rules for every source:
 
 | Source | How |
 |---|---|
-| Claude Code prompts | `mkdir -p HOME/corpus/claude && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" claude-prompts > HOME/corpus/claude/prompts.txt` (their most casual register; code, long pastes and multi-line blocks are already dropped) |
+| Claude Code prompts | `mkdir -p HOME/corpus/claude && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" claude-prompts > HOME/corpus/claude/prompts.txt` (their most casual register; the collector drops prompts that look pasted, such as code, quotes, long lines and multi-line blocks, but not all of them, so preview it) |
 | Past sessions | If a session-search CLI like `recall` is installed, search their own messages with it |
 | Blog, Medium, dev.to, Substack | The posts they name or the RSS feed; dev.to has `https://dev.to/api/articles?username=<name>` |
 | LinkedIn | Their data export (Settings, Data privacy, Get a copy of your data) has `Shares.csv` and `Comments.csv` |

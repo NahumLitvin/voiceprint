@@ -20,7 +20,7 @@ claude plugin marketplace add NahumLitvin/voiceprint && claude plugin install vo
 
 ## How the guard scores
 
-It counts words and phrases that mark machine-written English per 100 words: the 2023 vocabulary (`delve`, `seamless`, `it's not just X`, em dashes) and the words that suddenly spread in AI-written PRs in 2025 and 2026 (`load-bearing`, `quietly`, `genuinely`, `carve-out`), from the [load-bearing study](https://louisabraham.github.io/load-bearing/) of 461,121 GitHub PR texts. Any word you use in your own writing is dropped from the list, so your habits never count against you. The warn line is the 95th percentile of your own texts; the deny line is 1.5 times your worst one.
+It counts words and phrases that mark machine-written English per 100 words: the 2023 vocabulary (`delve`, `seamless`, `it's not just X`, em dashes) and the words that suddenly spread in AI-written PRs in 2025 and 2026 (`load-bearing`, `quietly`, `genuinely`, `carve-out`), from the [load-bearing study](https://louisabraham.github.io/load-bearing/) of 461,121 GitHub PR texts. Each word is allowed up to twice the rate you use it in your own writing, so your habits don't count against you but repeating them does. The warn line is the 95th percentile of your own texts; the deny line is 1.5 times your 99th percentile, at least 2.
 
 By default the hook asks you, with the score and the words, before the send runs. To block sends over the deny line instead (needs 5+ calibration texts of 25+ words), or to only tell Claude without asking:
 

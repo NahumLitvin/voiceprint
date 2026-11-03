@@ -39,9 +39,9 @@ TELLS.update({p: 2 for p in [
 DASHES = re.compile(r"—|–| -- ")
 EMOJI = re.compile(r"[\U0001F300-\U0001FAFF☀-➿]")
 SIGNOFF = re.compile(r"^(thanks|thank you|best|regards|cheers|sincerely|warmly)\b[^\n]{0,30}$", re.I | re.M)
-SEND = re.compile(r"\bgh\s+(pr|issue)\s+(create|comment|edit|review)\b|\bgit(\s+-[Cc]\s+\S+)*\s+commit\b")
-SLACK_SEND = re.compile(r"slack.*(post|send|reply|update|chat|message)", re.I)
-SLACK_READ = re.compile(r"search|read|list|get|history|info|lookup", re.I)
+HEREDOC = re.compile(r"<<-?[ \t]*(['\"]?)(\w+)\1([^\n]*)\n(.*?)\n[ \t]*\2[ \t]*(?:\n|$)", re.S)
+SLACK_SEND = {"post", "send", "reply", "update", "edit", "postmessage"}
+SLACK_SKIP = {"search", "read", "list", "get", "history", "info", "lookup", "draft", "drafts"}
 
 
 def normalize(text):
@@ -49,7 +49,8 @@ def normalize(text):
 
 
 def strip_code(text):
-    return re.sub(r"`[^`\n]*`", " ", re.sub(r"(?s)```.*?```", " ", normalize(text)))
+    text = re.sub(r"(?ms)^[ \t]*(```|~~~).*?^[ \t]*\1", " ", normalize(text))
+    return re.sub(r"`[^`\n]*`", " ", text)
 
 
 def words(text):
@@ -132,6 +133,10 @@ def load():
         return None
 
 
+PASTED = re.compile(r"```|~~~|https?://\S{60,}|[A-Za-z0-9+/=_-]{40,}|^\s*>|^\s*[\w.\[\]]+\s*[-+*/]?=\s*\S"
+                    r"|[{};]\s*$|^\s*(def|class|import|from|function|const|let|var|return|SELECT|\$)\b", re.M)
+
+
 def claude_prompts(root="~/.claude/projects"):
     """What the user typed to Claude Code, minus what looks pasted (code, multi-line blocks, long walls of text)."""
     for f in sorted(glob.glob(os.path.join(os.path.expanduser(root), "*", "*.jsonl"))):
@@ -143,7 +148,7 @@ def claude_prompts(root="~/.claude/projects"):
             c = (e.get("message") or {}).get("content")
             if e.get("type") != "user" or not isinstance(c, str) or c.lstrip().startswith(("<", "[", "Caveat:")):
                 continue
-            if "```" in c or c.count("\n") > 3 or re.search(r"https?://\S{60,}|[A-Za-z0-9+/=_-]{40,}", c):
+            if c.count("\n") > 1 or PASTED.search(c):
                 continue
             c = " ".join(c.split())
             if 2 <= len(c.split()) <= 120:
@@ -151,43 +156,95 @@ def claude_prompts(root="~/.claude/projects"):
 
 
 def read_file(path, cwd):
-    p = path if os.path.isabs(path) else os.path.join(cwd or os.getcwd(), path)
+    p = os.path.join(cwd, os.path.expanduser(path))
     try:
         return open(p, errors="ignore").read(MAX_FILE) if os.path.isfile(p) else None
     except OSError:
         return None
 
 
+def send_args(toks):
+    """(args after the send subcommand, git -C dirs) when the tokens are a gh or git send, else None."""
+    while toks and re.match(r"^\w+=", toks[0]):
+        toks = toks[1:]
+    if not toks:
+        return None
+    prog, i, dirs = os.path.basename(toks[0]), 1, []
+    if prog == "git":
+        while i < len(toks) and toks[i].startswith("-"):
+            if toks[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace") and i + 1 < len(toks):
+                dirs += [toks[i + 1]] if toks[i] == "-C" else []
+                i += 2
+            else:
+                i += 1
+        return (toks[i + 1:], dirs) if i < len(toks) and toks[i] == "commit" else None
+    if prog == "gh":
+        while i < len(toks) and toks[i].startswith("-"):
+            i += 2 if toks[i] in ("-R", "--repo", "--hostname") else 1
+        if i + 1 < len(toks) and toks[i] in ("pr", "issue") and toks[i + 1] in ("create", "comment", "edit", "review"):
+            return toks[i + 2:], dirs
+    return None
+
+
+def bash_text(cmd, cwd):
+    """Bodies of gh/git sends in a shell command; heredocs count only when the send consumes them."""
+    if not re.search(r"\b(git|gh)\b", cmd):
+        return None
+    bodies = {}
+    def hold(m):
+        key = f"VPHEREDOC{len(bodies)}"
+        bodies[key] = m.group(4)
+        return f"<<{key}{m.group(3)}\n"
+    flat = HEREDOC.sub(hold, cmd).replace("\n", " ;\n")
+    try:
+        lex = shlex.shlex(flat, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        toks = list(lex)
+    except ValueError:
+        return None
+    keys = lambda seg: [k for t in seg for k in re.findall(r"VPHEREDOC\d+", t)]
+    segs, cur = [], []
+    for t in toks + [";"]:
+        if t in ("&&", "||", ";", "|", "&", ";;"):
+            segs.append((cur, t))
+            cur = []
+        else:
+            cur.append(t)
+    here, parts, piped = cwd or os.getcwd(), [], []
+    for seg, op in segs:
+        if seg[:1] == ["cd"] and len(seg) > 1:
+            here = os.path.join(here, os.path.expanduser(seg[1]))
+        found = send_args(seg)
+        if found:
+            args, dirs = found
+            base, used = os.path.join(here, *dirs), []
+            for i, t in enumerate(args):
+                nxt = args[i + 1] if i + 1 < len(args) else ""
+                k, _, v = t.partition("=")
+                arg = (nxt if t in ("-m", "--message", "-b", "--body") else v if k in ("--message", "--body") and v
+                       else t[2:] if t.startswith("-m") and len(t) > 2 and not t.startswith("--") else None)
+                if arg is not None and keys([arg]):
+                    used += keys([arg])
+                    parts += [bodies[k2] for k2 in keys([arg])]
+                elif arg is not None and "$(" not in arg:
+                    parts.append(arg.replace(" ;\n", "\n"))
+                if t in ("-F", "--body-file", "--file") or (k in ("--body-file", "--file") and v):
+                    f = v or nxt
+                    if f == "-":
+                        parts += [bodies[k2] for k2 in keys(seg) + piped if k2 not in used]
+                    else:
+                        parts.append(read_file(f, base) or "")
+        piped = keys(seg) if op == "|" else []
+    return "\n".join(p for p in parts if p and p.strip()) or None
+
+
 def outgoing_text(call):
     """The prose a tool call is about to send, or None."""
-    name, inp, cwd = call.get("tool_name", ""), call.get("tool_input", {}) or {}, call.get("cwd")
+    name, inp = call.get("tool_name", ""), call.get("tool_input", {}) or {}
     if name == "Bash":
-        cmd = inp.get("command", "")
-        if not SEND.search(cmd):
-            return None
-        parts = [b for _, b in re.findall(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n(.*?)\n[ \t]*\1[ \t]*$", cmd, re.S | re.M)]
-        try:
-            toks = shlex.split(re.sub(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n[ \t]*\1[ \t]*$", "", cmd, flags=re.S | re.M))
-        except ValueError:
-            toks = []
-        for i, t in enumerate(toks):
-            nxt = toks[i + 1] if i + 1 < len(toks) else ""
-            k, _, v = t.partition("=")
-            if t in ("-m", "--message", "-b", "--body"):
-                arg = nxt
-            elif k in ("--message", "--body") and v:
-                arg = v
-            elif t.startswith("-m") and len(t) > 2 and not t.startswith("--"):
-                arg = t[2:]
-            else:
-                arg = None
-            if arg is not None and "$(" not in arg:
-                parts.append(arg)
-            if t in ("-F", "--body-file", "--file") or (k in ("--body-file", "--file") and v):
-                f = read_file(v or nxt, cwd) if (v or nxt) != "-" else None
-                parts.append(f or "")
-        return "\n".join(p for p in parts if p.strip()) or None
-    if SLACK_SEND.search(name) and not SLACK_READ.search(name.split("__")[-1]):
+        return bash_text(inp.get("command", ""), call.get("cwd"))
+    words_in_name = set(re.split(r"[^a-z]+", name.lower().split("__")[-1]))
+    if "slack" in name.lower() and words_in_name & SLACK_SEND and not words_in_name & SLACK_SKIP:
         found = []
         def walk(o):
             if isinstance(o, dict):
@@ -249,18 +306,35 @@ def selftest():
     assert b("git -C repo commit -m 'in repo'") == "in repo"
     assert b("ls -la") is None
     assert b("git commit -m \"$(cat <<'EOF'\nline one\nEOFX\nline two\nEOF\n)\"") == "line one\nEOFX\nline two"
-    assert b("cat <<EOF > notes.txt\nunrelated\nEOF\ngit commit -m 'real msg'") == "unrelated\nreal msg"
+    assert b("cat <<EOF > notes.txt\nunrelated\nEOF\ngit commit -m 'real msg'") == "real msg"
+    assert b("gh pr create --title t --body-file - <<'EOF'\nfrom stdin\nEOF") == "from stdin"
+    assert b("cat <<EOF | gh pr comment 1 --body-file -\npiped body\nEOF") == "piped body"
+    assert b("git -C 'my repo' commit -m 'quoted dir'") == "quoted dir"
+    assert b("gh --repo owner/repo pr comment 1 --body 'global flag'") == "global flag"
+    assert b("echo 'git commit -m nope'") is None
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        os.mkdir(os.path.join(td, "sub"))
+        open(os.path.join(td, "sub", "msg.txt"), "w").write("in sub")
+        assert b("git -C sub commit -F msg.txt", cwd=td) == "in sub"
+        assert b("cd sub && git commit -F msg.txt", cwd=td) == "in sub"
+    sneaky = {"tool_name": "Bash", "tool_input": {"command": "cat <<EOF >/dev/null\nvoice-ok\nEOF\ngh pr comment 1 --body " + shlex.quote(ai)}}
     d = os.path.dirname(os.path.abspath(__file__))
     assert b("gh pr create --body-file voiceprint.py", cwd=d).startswith("#!/usr/bin/env python3")
     slack = {"tool_name": "mcp__slack__chat_post_message", "tool_input": {"channel": "C1", "blocks": [{"text": {"text": "nested"}}]}}
     assert outgoing_text(slack) == "nested"
     assert outgoing_text({"tool_name": "mcp__slack__search_messages", "tool_input": {"text": "q"}}) is None
+    assert outgoing_text({"tool_name": "mcp__slack__reply_to_thread", "tool_input": {"text": "r"}}) == "r"
+    assert outgoing_text({"tool_name": "mcp__slack__slack_send_message_draft", "tool_input": {"text": "d"}}) is None
+    assert "voice-ok" not in strip_code("prose\n~~~\nvoice-ok\n~~~\nmore")
+    assert PASTED.search("look at this\na = 1") and not PASTED.search("can you check the deploy, it looks stuck")
     call = {"tool_name": "Bash", "tool_input": {"command": "gh pr comment 1 --body " + shlex.quote(ai)}}
     assert decide(call, None, "ask")["hookSpecificOutput"]["permissionDecision"] == "ask"
     assert decide(call, {"warn": 1.0, "deny": 2.0}, "deny")["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "additionalContext" in decide(call, None, "note")["hookSpecificOutput"]
     ok = {"tool_name": "Bash", "tool_input": {"command": "gh pr comment 1 --body " + shlex.quote(ai + " voice-ok")}}
     assert decide(ok, None, "deny") is None
+    assert decide(sneaky, {"warn": 1.0, "deny": 2.0}, "deny")["hookSpecificOutput"]["permissionDecision"] == "deny"
     print("selftest ok")
 
 
