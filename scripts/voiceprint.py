@@ -330,6 +330,12 @@ def substitutions(cmd):
             flat.append(cmd[i:i + 2])
             i += 2
             continue
+        if c == "#" and outer is None and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
+            end = cmd.find("\n", i)
+            end = len(cmd) if end < 0 else end
+            flat.append(cmd[i:end])
+            i = end
+            continue
         if c == "'" and outer != '"' or c == '"' and outer != "'":
             outer = None if outer == c else c
         if outer == "'":
@@ -782,6 +788,9 @@ def selftest():
             assert ai in (b(c, cwd=td2) or ""), c
         assert b("git commit -m '$(cat body.txt)'", cwd=td2) == "$(cat body.txt)"
         assert ai in b('git commit -m "$(cat body.txt)"', cwd=td2)
+        commented = "# Don't push yet\ngh pr create --title t --body \"$(cat <<'EOF'\n" + ai + "\nEOF\n)\""
+        assert ai in (b(commented, cwd=td2) or ""), "an apostrophe in a comment must not hide the body"
+        assert ai in (b("# don't forget\ngh pr comment 1 --body \"$(cat body.txt)\"", cwd=td2) or "")
         if hasattr(os, "mkfifo"):
             os.mkfifo(os.path.join(td2, "fifo"))
             assert b("gh pr comment 1 --body-file fifo", cwd=td2) is None
