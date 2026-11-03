@@ -368,10 +368,6 @@ def substitutions(cmd):
     return "".join(flat), subs
 
 
-def bash_text(cmd, cwd):
-    return "\n".join(bash_parts(cmd, cwd)) or None
-
-
 def bash_parts(cmd, cwd, written=None, depth=0):
     """Read send bodies without executing shell commands."""
     if len(cmd) > MAX_COMMAND or depth > 10:
@@ -392,6 +388,9 @@ def bash_parts(cmd, cwd, written=None, depth=0):
         return []
     def path(f, here):
         return os.path.normcase(os.path.abspath(os.path.join(here, os.path.expanduser(f))))
+    def fetch(f, here):
+        k = path(f, here)
+        return written[k] if k in written else read_file(f, here) or ""
     def value(arg, here):
         if arg in subs:
             try:
@@ -399,8 +398,7 @@ def bash_parts(cmd, cwd, written=None, depth=0):
             except ValueError:
                 return ""
             if len(inner) == 2 and inner[0] == "cat" and not inner[1].startswith("<<"):
-                f = path(inner[1], here)
-                return written[f] if f in written else read_file(inner[1], here) or ""
+                return fetch(inner[1], here)
             if len(inner) == 3 and inner[:2] == ["cat", "<<"]:
                 return bodies.get(inner[2], "")
             if len(inner) == 2 and inner[0] == "cat" and inner[1].startswith("<<"):
@@ -425,8 +423,7 @@ def bash_parts(cmd, cwd, written=None, depth=0):
             elif t == "<<<":
                 stdin = value(seg[i + 1], here)
             elif t == "<":
-                f = path(seg[i + 1], here)
-                stdin = written[f] if f in written else read_file(seg[i + 1], here) or ""
+                stdin = fetch(seg[i + 1], here)
         prog = basename(seg[0]) if seg else ""
         output = stdin
         if prog == "cat":
@@ -439,8 +436,7 @@ def bash_parts(cmd, cwd, written=None, depth=0):
                 elif t == "-":
                     files.append(stdin)
                 elif not t.startswith("-"):
-                    f = path(t, here)
-                    files.append(written[f] if f in written else read_file(t, here) or "")
+                    files.append(fetch(t, here))
             if files:
                 output = "".join(files)[:MAX_FILE]
         if prog in ("echo", "printf"):
@@ -493,8 +489,7 @@ def bash_parts(cmd, cwd, written=None, depth=0):
                 if t in ("-F", "--body-file", "--file") or (k in ("--body-file", "--file") and equal) or (t.startswith("-F") and len(t) > 2):
                     f = v if equal else t[2:] if t.startswith("-F") and len(t) > 2 else nxt
                     consumed = 1 if equal or (t.startswith("-F") and len(t) > 2) else 2
-                    resolved = path(f, base)
-                    parts.append(stdin if f == "-" else written[resolved] if resolved in written else read_file(f, base) or "")
+                    parts.append(stdin if f == "-" else fetch(f, base))
                 i += consumed
         piped = output if op == "|" else ""
         if op == "(":
