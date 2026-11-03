@@ -321,8 +321,19 @@ def heredocs(cmd):
 
 
 def substitutions(cmd):
-    flat, subs, i = [], {}, 0
+    flat, subs, i, outer = [], {}, 0, None
     while i < len(cmd):
+        c = cmd[i]
+        if c == "\\" and outer != "'":
+            flat.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if c == "'" and outer != '"' or c == '"' and outer != "'":
+            outer = None if outer == c else c
+        if outer == "'":
+            flat.append(c)
+            i += 1
+            continue
         if cmd.startswith("$(", i):
             start, depth, quote = i + 2, 1, None
             i += 2
@@ -350,10 +361,14 @@ def substitutions(cmd):
     return "".join(flat), subs
 
 
-def bash_text(cmd, cwd, written=None, depth=0):
+def bash_text(cmd, cwd):
+    return "\n".join(bash_parts(cmd, cwd)) or None
+
+
+def bash_parts(cmd, cwd, written=None, depth=0):
     """Read send bodies without executing shell commands."""
     if len(cmd) > MAX_COMMAND or depth > 10:
-        return None
+        return []
     written = {} if written is None else written
     flat, bodies = heredocs(cmd.replace("\\\n", ""))
     flat, subs = substitutions(flat)
@@ -366,7 +381,7 @@ def bash_text(cmd, cwd, written=None, depth=0):
             toks.extend(re.findall(r"&&|\|\||;;|<<<|<<|>>|[();<>|&\n]", token)
                         if re.fullmatch(r"[();<>|&\n]+", token) else [token])
     except ValueError:
-        return None
+        return []
     def path(f, here):
         return os.path.normcase(os.path.abspath(os.path.join(here, os.path.expanduser(f))))
     def value(arg, here):
@@ -401,8 +416,25 @@ def bash_text(cmd, cwd, written=None, depth=0):
                 stdin = bodies.get(seg[i + 1], "")
             elif t == "<<<":
                 stdin = value(seg[i + 1], here)
+            elif t == "<":
+                f = path(seg[i + 1], here)
+                stdin = written[f] if f in written else read_file(seg[i + 1], here) or ""
         prog = basename(seg[0]) if seg else ""
         output = stdin
+        if prog == "cat":
+            files, skip = [], False
+            for t in seg[1:]:
+                if skip:
+                    skip = False
+                elif t in ("<", "<<", "<<<", ">", ">>"):
+                    skip = True
+                elif t == "-":
+                    files.append(stdin)
+                elif not t.startswith("-"):
+                    f = path(t, here)
+                    files.append(written[f] if f in written else read_file(t, here) or "")
+            if files:
+                output = "".join(files)[:MAX_FILE]
         if prog in ("echo", "printf"):
             args = seg[1:]
             args = args[:next((i for i, t in enumerate(args) if t in (">", ">>", "<", "<<", "<<<")), len(args))]
@@ -428,7 +460,7 @@ def bash_text(cmd, cwd, written=None, depth=0):
                         written[path(f, here)] = output
         if prog in ("bash", "sh") and "-c" in seg and seg.index("-c") + 1 < len(seg):
             inner = re.sub(r"VPSUB\d+", lambda m: "$(" + subs[m[0]] + ")", seg[seg.index("-c") + 1])
-            parts.append(bash_text(inner, here, written, depth + 1) or "")
+            parts.extend(bash_parts(inner, here, written, depth + 1))
         found = send_args(seg)
         if found:
             args, dirs = found
@@ -461,14 +493,18 @@ def bash_text(cmd, cwd, written=None, depth=0):
             stack.append(here)
         elif op == ")" and stack:
             here = stack.pop()
-    return "\n".join(p for p in parts if p and p.strip()) or None
+    return [p for p in parts if p and p.strip()]
 
 
 def outgoing_text(call):
-    """The prose a tool call is about to send, or None."""
+    return "\n".join(outgoing_messages(call)) or None
+
+
+def outgoing_messages(call):
+    """Each message a tool call is about to send."""
     name, inp = call.get("tool_name", ""), call.get("tool_input", {}) or {}
     if name == "Bash":
-        return bash_text(inp.get("command", ""), call.get("cwd"))
+        return bash_parts(inp.get("command", ""), call.get("cwd"))
     words_in_name = set(re.split(r"[^a-z]+", name.lower().split("__")[-1]))
     sends = (words_in_name & SLACK_SEND or
              words_in_name & {"canvas", "canvases"} and words_in_name & {"create", "update"} or
@@ -486,12 +522,17 @@ def outgoing_text(call):
                 for v in o:
                     walk(v)
         walk(inp)
-        return "\n".join(found) or None
-    return None
+        return ["\n".join(found)] if found else []
+    return []
 
 
 def decide(call, base, mode):
-    text = outgoing_text(call)
+    found = [d for d in (decide_text(t, base, mode) for t in outgoing_messages(call)) if d]
+    rank = lambda d: {"deny": 2, "ask": 1}.get(d["hookSpecificOutput"].get("permissionDecision"), 0)
+    return max(found, key=rank) if found else None
+
+
+def decide_text(text, base, mode):
     if not text or ESCAPE.search(strip_code(text)) or len(words(strip_code(text))) < MIN_WORDS:
         return None
     s, hits = score(text, base)
@@ -506,7 +547,7 @@ def decide(call, base, mode):
         msg += " No baseline yet: run /voiceprint:voice-init."
     if mode == "note":
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}
-    deny = mode == "deny" and base and (dash_rule or (base.get("deny") and s >= base["deny"]))
+    deny = mode == "deny" and base and base.get("deny") and (dash_rule or s >= base["deny"])
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny" if deny else "ask",
                                    "permissionDecisionReason": msg}}
 
@@ -732,6 +773,15 @@ def selftest():
         with patch.dict(globals(), HOME=td2, BASELINE=os.path.join(td2, "baseline.json")):
             b2 = build([os.path.join(td2, "a.md")], recent=[os.path.join(td2, "a.md")])
         assert b2["lowercase_start_share"] == 0.5 and b2["question_unit_share"] == 1.0 and "drift" not in b2 and "drift_note" in b2
+        open(os.path.join(td2, "body.txt"), "w").write(ai)
+        mixed = {"tool_name": "Bash", "tool_input": {"command": "git commit -m 'voice-ok'; gh pr comment 1 --body " + shlex.quote(ai)}}
+        assert decide(mixed, None, "ask"), "one message's voice-ok must not exempt another"
+        for c in ("cat body.txt | gh pr comment 1 --body-file -", "gh pr comment 1 --body-file - < body.txt"):
+            assert ai in (b(c, cwd=td2) or ""), c
+        assert b("git commit -m '$(cat body.txt)'", cwd=td2) == "$(cat body.txt)"
+        assert ai in b('git commit -m "$(cat body.txt)"', cwd=td2)
+    assert decide(dcall, {"warn": 50.0, "deny": None, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert decide(dcall, {"warn": 50.0, "deny": 3.0, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]["permissionDecision"] == "deny"
     print("selftest ok")
 
 
