@@ -41,8 +41,9 @@ TELLS.update({p: 2 for p in [
     "at its core", "serves as a", "plays a crucial role", "i hope this helps", "great question", "game-changer",
     "cutting-edge", "let's explore", "in the realm of", "here's the thing", "the bottom line",
 ]})
-DASHES = re.compile(r"—|–| -- ")
-EMOJI = re.compile(r"[\U0001F300-\U0001FAFF☀-➿]")
+DASHES = re.compile(r"—|(?<!\d)(?<!\d )–(?! ?\d)| -- ")
+EMOJI = re.compile(r"[\U0001F300-\U0001FAFF☀-➿]|:[a-z0-9_+-]{2,30}:")
+DRIFT_MIN_WORDS = 5000
 SIGNOFF = re.compile(r"^(thanks|thank you|best|regards|cheers|sincerely|warmly)\b[^\n]{0,30}$", re.I | re.M)
 HEREDOC_START = re.compile(r"(?<!<)<<(-?)[ \t]*(['\"]?)([\w-]+)\2")
 SLACK_SEND = {"post", "send", "reply", "update", "edit", "postmessage", "schedule", "scheduled", "schedulemessage", "scheduledmessage"}
@@ -89,10 +90,19 @@ def score(text, base=None):
     return round(100 * sum(list(ranked.values())[:3]) / max(n, 100), 2), ranked
 
 
+def unmark(text):
+    """Slack/Discord markup to plain text: <url|label> keeps the label, mentions and bare links go."""
+    text = re.sub(r"<(?:https?://|mailto:)[^>|]*\|([^>]+)>", r"\1", text)
+    return re.sub(r"<[@#!][^>]*>|<(?:https?://|mailto:)[^>]*>", " ", text)
+
+
 def strip_replies(text):
-    kept = []
-    for line in text.splitlines():
-        if re.match(r"^\s*On .+ wrote:\s*$", line, re.I) or re.match(
+    kept, rows = [], text.splitlines()
+    for i, line in enumerate(rows):
+        nxt = rows[i + 1] if i + 1 < len(rows) else ""
+        header = re.match(r"^\s*On\b.+wrote:\s*$", line, re.I) or (
+            re.match(r"^\s*On\b.{6,}", line) and re.match(r"^.{0,80}wrote:\s*$", nxt.strip(), re.I))
+        if header or re.match(
                 r"^\s*(?:-+\s*(?:Original Message|Forwarded message)\s*-+|Begin forwarded message:)", line, re.I):
             break
         if not line.lstrip().startswith(">"):
@@ -112,7 +122,7 @@ def units(paths, lines):
                     print("warning: skipping file over 5 MB: " + f, file=sys.stderr)
                     continue
                 with open(f, encoding="utf-8", errors="replace") as source:
-                    t = strip_replies(source.read(MAX_FILE))
+                    t = strip_replies(unmark(source.read(MAX_FILE)))
             except OSError:
                 continue
             for u in (t.splitlines() if lines else [t]):
@@ -162,13 +172,14 @@ def build(paths, lines=False, recent=()):
     per_k = lambda c: round(1000 * c / allw, 2)
     pieces = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", body) if s.strip()]
     sents = [len(words(s)) for s in pieces if words(s)]
-    starts = [s[0] for s in pieces if s[0].isalpha()]
+    starts = [s[0] for s in pieces if s[0].islower() or s[0].isupper()]
     lens = [len(words(strip_code(d))) for d in docs]
     base = {
         "units": len(docs), "words": allw, "split": "lines" if lines else "files",
         "median_words_per_unit": statistics.median(lens), "short_units_share": round(sum(l <= 3 for l in lens) / len(lens), 2),
         "median_sentence_words": statistics.median(sents) if sents else 0, "p90_sentence_words": pct(sents, 0.9),
         "lowercase_start_share": round(sum(c.islower() for c in starts) / max(len(starts), 1), 2),
+        "question_unit_share": round(sum("?" in d for d in docs) / len(docs), 2),
         "rates": {"dashes": per_k(len(DASHES.findall(body))), "exclamations": per_k(body.count("!")),
                   "questions": per_k(body.count("?")), "semicolons": per_k(body.count(";")),
                   "soft_pause_dots": per_k(len(re.findall(r"(?<!\.)\.\.(?!\.)", body))), "ellipses": per_k(body.count("...") + body.count("…")),
@@ -176,7 +187,10 @@ def build(paths, lines=False, recent=()):
                   "contractions": per_k(len(re.findall(r"\b\w+(n't|'re|'ll|'ve|'m|'d)\b", low))),
                   "signoffs": per_k(sum(len(d.strip().splitlines()) >= 3 and bool(SIGNOFF.match(d.strip().splitlines()[-1].strip())) for d in docs))},
     }
-    if recent:
+    if recent and allw < DRIFT_MIN_WORDS:
+        base["drift_note"] = f"drift needs {DRIFT_MIN_WORDS:,}+ words of earlier writing, found {allw:,}: skipped"
+        print("warning: " + base["drift_note"], file=sys.stderr)
+    elif recent:
         base["drift"] = drift_words(docs, list(units(recent, lines)))
     base["tell_rates"] = {t: r for t in list(TELLS) + list(base.get("drift", {})) if (r := per_k(count(t, low)))}
     own = [score(d, base)[0] for d in docs if len(words(strip_code(d))) >= MIN_WORDS]
@@ -709,6 +723,15 @@ def selftest():
     d = drift_words(before, recent)
     assert "nothing" in d and "fixed" not in d and "the" not in d, d
     assert score("nothing " * 30, {"drift": {"nothing": 16.0}})[0] >= 20
+    assert strip_replies("thanks!\nOn Mon, Jan 3, 2022 at 10:00 Pat <p@x.com>\nwrote:\n> old") == "thanks!"
+    assert DASHES.findall("13:00 – 15:00 and 3–5") == [] and DASHES.findall("well – no") == ["–"]
+    assert unmark("see <https://x.io/a|the doc> <@U123> <https://x.io>") == "see the doc    "
+    assert EMOJI.findall("nice :tada: ok") == [":tada:"]
+    with tempfile.TemporaryDirectory() as td2:
+        open(os.path.join(td2, "a.md"), "w").write("שלום. Hello there? ok")
+        with patch.dict(globals(), HOME=td2, BASELINE=os.path.join(td2, "baseline.json")):
+            b2 = build([os.path.join(td2, "a.md")], recent=[os.path.join(td2, "a.md")])
+        assert b2["lowercase_start_share"] == 0.5 and b2["question_unit_share"] == 1.0 and "drift" not in b2 and "drift_note" in b2
     print("selftest ok")
 
 

@@ -15,7 +15,7 @@ Show the user one menu of what you found and what each would collect, and get an
 
 Rules for every source:
 - Only text the user wrote. Never save other people's messages, even from a chat they were in.
-- Skip what they pasted or had AI draft, when they can point to it.
+- Skip what they pasted or had AI draft, when they can point to it. In chat, drop forwarded and pasted text: messages marked forwarded, multi-paragraph blocks, lines with dashes or bullets they never type, and anything far longer than their usual message.
 - Save plain text under `${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus/<source>/` (create the folder first): one `.md` per post for long form, one message per line in a `.txt` for chat.
 - For any email source, strip quoted replies and forwarded text before saving. Keep only the user's new text, even when the quoted text was originally theirs.
 
@@ -29,7 +29,7 @@ Rules for every source:
 | Hacker News | `https://hn.algolia.com/api/v1/search_by_date?tags=comment,author_<name>&hitsPerPage=1000` |
 | X / Twitter | Their archive's `data/tweets.js`, without retweets |
 | Bluesky, Mastodon | Their public author feed through the site's API |
-| GitHub | PR bodies are often AI-written. Ask for a cutoff date before they used AI writing tools, then search their PRs before that date with `gh` and preview the bodies with them. Drop bot templates and bodies that score high with `score -`; include only text they confirm they wrote. Apply the same checks to issue comments. |
+| GitHub | PR bodies are often AI-written. Ask for a cutoff date before they used AI writing tools, then search their PRs before that date with `gh` and preview the bodies with them. Drop bot templates and templated bodies: mostly headings like `## Summary`, `## Test plan`, checkboxes or a tool's footer, even when old, since templated AI text scores low. Include only text they confirm they wrote. Apply the same checks to issue comments. |
 | Slack, Notion | The connected MCP tool, searching only what they sent (`from:me`) |
 | Gmail and other email | The connected tool or a Sent mail export, keeping only what they sent. Strip quoted replies and forwarded text before saving, then preview the remaining text. |
 | Telegram | Telegram Desktop, Export chat history, JSON; keep messages whose `from_id` is theirs, or use the MCP tool if connected |
@@ -69,11 +69,11 @@ The outputs are `${VOICEPRINT_HOME:-$HOME/.voiceprint}/baseline.json` for long f
 
 Slack sends use the chat baseline when available, otherwise the default. GitHub and git sends use the default baseline.
 
-**Drift.** Text the user wrote after they started using AI tools (posts, PR bodies, long messages after their cutoff date) goes in `corpus/recent/`, not in the voice corpus. The long-form build compares it with their earlier writing and stores the words that became much more frequent as `drift` in `baseline.json`: their personal AI tells. Show the list. Topic words (a product they started working on, a new tool) are not tells: remove them from `drift` in the JSON with the user before moving on. With under about 5,000 words of earlier writing the list is noisy, so say so.
+**Drift.** Text the user wrote after they started using AI tools (posts, PR bodies, long messages after their cutoff date) goes in `corpus/recent/`, not in the voice corpus. The long-form build compares it with their earlier writing and stores the words that became much more frequent as `drift` in `baseline.json`: their personal AI tells. Show the list. Topic words (a product they started working on, a new tool) are not tells: remove them from `drift` in the JSON with the user before moving on. Under 5,000 words of earlier writing, `build` skips drift and says so (`drift_note`): ordinary words would look like drift. Tell the user and offer to add more earlier writing (old email, posts) instead.
 
 ## 3. Write the profile
 
-Read 20 to 30 samples across sources, then write `${VOICEPRINT_HOME:-$HOME/.voiceprint}/profile.md` with these sections, each backed by numbers from the two baselines or quotes from the samples:
+Read 20 to 30 long-form samples across sources. For chat, read whole threads, not corpus lines: 5 to 10 conversations of about 30 consecutive messages from the source (MCP tool or export), so turn-level habits show up: messages sent in bursts, how they greet and sign off, how they escalate or push back, humor, how they introduce themselves to strangers, slang per language. Quote only their own lines. Then write `${VOICEPRINT_HOME:-$HOME/.voiceprint}/profile.md` with these sections, each backed by numbers from the two baselines or quotes from the samples:
 
 - **Rhythm**: sentence and message length, how paragraphs open and close.
 - **Punctuation and marks**: what they use and what they never use (dashes, `!`, emoji, lowercase starts).
