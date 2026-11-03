@@ -34,6 +34,8 @@ You can add `voice-ok` to a text, outside code, to let it through when a flagged
 
 The hook reads UTF-8, replacing invalid bytes. Invalid baselines are ignored; unexpected hook errors produce no output. Shell commands over 200,000 characters are skipped.
 
+The hook is a writing check, not a security boundary. It reads the command as text and never runs it, so a body that comes from a shell variable, a wrapper such as `timeout`, or `gh api` is not seen, and neither are `gh pr merge --body`, `git tag -m` or `git merge -m`. Use `/voiceprint:voice` for anything you paste yourself.
+
 ## Without Claude Code
 
 ```bash

@@ -11,10 +11,10 @@ voiceprint reads the writing you give it and every Bash or Slack tool call Claud
 - your corpus, profile or baseline leaving your machine, or landing in a repo, a log or a tool call
 - the hook reading a file the command did not name, or reading outside the size limit
 - the hook running, evaluating or expanding any part of the command it inspects
-- crafted command text or a crafted baseline making the hook allow a call it should ask about or deny, or crash in a way that blocks every call
+- crafted command text or a crafted baseline making the hook crash or hang in a way that blocks every call
 - the collector saving other people's messages as the user's own
 
-A tell word missing from the list, or a draft that scores lower than it should, is a normal bug: open an issue.
+The hook is a best-effort writing check, not a security boundary: it reads commands as text, so some sends are not seen (see the README). A send the hook misses, a tell word missing from the list, or a draft that scores lower than it should is a normal bug: open an issue.
 
 ## Supported versions
 

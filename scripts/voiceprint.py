@@ -253,6 +253,8 @@ def claude_prompts(root="~/.claude/projects"):
 
 def read_file(path, cwd):
     p = os.path.join(cwd, os.path.expanduser(path))
+    if not os.path.isfile(p):
+        return None
     try:
         with open(p, encoding="utf-8", errors="replace") as source:
             return source.read(MAX_FILE)
@@ -769,17 +771,20 @@ def selftest():
     assert unmark("see <https://x.io/a|the doc> <@U123> <https://x.io>") == "see the doc    "
     assert EMOJI.findall("nice :tada: ok") == [":tada:"]
     with tempfile.TemporaryDirectory() as td2:
-        open(os.path.join(td2, "a.md"), "w").write("שלום. Hello there? ok")
+        open(os.path.join(td2, "a.md"), "w", encoding="utf-8").write("שלום. Hello there? ok")
         with patch.dict(globals(), HOME=td2, BASELINE=os.path.join(td2, "baseline.json")):
             b2 = build([os.path.join(td2, "a.md")], recent=[os.path.join(td2, "a.md")])
         assert b2["lowercase_start_share"] == 0.5 and b2["question_unit_share"] == 1.0 and "drift" not in b2 and "drift_note" in b2
-        open(os.path.join(td2, "body.txt"), "w").write(ai)
+        open(os.path.join(td2, "body.txt"), "w", encoding="utf-8").write(ai)
         mixed = {"tool_name": "Bash", "tool_input": {"command": "git commit -m 'voice-ok'; gh pr comment 1 --body " + shlex.quote(ai)}}
         assert decide(mixed, None, "ask"), "one message's voice-ok must not exempt another"
         for c in ("cat body.txt | gh pr comment 1 --body-file -", "gh pr comment 1 --body-file - < body.txt"):
             assert ai in (b(c, cwd=td2) or ""), c
         assert b("git commit -m '$(cat body.txt)'", cwd=td2) == "$(cat body.txt)"
         assert ai in b('git commit -m "$(cat body.txt)"', cwd=td2)
+        if hasattr(os, "mkfifo"):
+            os.mkfifo(os.path.join(td2, "fifo"))
+            assert b("gh pr comment 1 --body-file fifo", cwd=td2) is None
     assert decide(dcall, {"warn": 50.0, "deny": None, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]["permissionDecision"] == "ask"
     assert decide(dcall, {"warn": 50.0, "deny": 3.0, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]["permissionDecision"] == "deny"
     print("selftest ok")
