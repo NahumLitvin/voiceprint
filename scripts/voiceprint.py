@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """voiceprint: measure how you write, then score drafts against it.
 
-  voiceprint.py build PATH... [--lines]   fingerprint your writing into $VOICEPRINT_HOME (default ~/.voiceprint)
+  voiceprint.py build PATH... [--lines] [--recent PATH...]
+                                          fingerprint your writing into $VOICEPRINT_HOME (default ~/.voiceprint);
+                                          --recent: your later, possibly AI-assisted text, to learn your own drift words
   voiceprint.py score [FILE|-]            score a draft against your baseline
   voiceprint.py claude-prompts            print what you typed to Claude Code, one prompt per line
   voiceprint.py hook                      Claude Code PreToolUse hook (reads the tool call on stdin)
   voiceprint.py selftest
 """
-import glob, json, math, os, re, shlex, statistics, sys
+import collections, glob, json, math, os, re, shlex, statistics, sys
 from collections import deque
 
 HOME = os.path.expanduser(os.environ.get("VOICEPRINT_HOME", "~/.voiceprint"))
@@ -15,6 +17,7 @@ BASELINE = os.path.join(HOME, "baseline.json")
 ESCAPE = re.compile(r"(?<![\w-])voice-ok(?![\w-])")
 MIN_WORDS = 25
 MIN_CALIBRATION = 5
+WARN_FLOOR, DENY_FLOOR = 2.0, 3.0  # tell hits per 100 words; one ordinary word must not trip it
 MAX_FILE = 5_000_000
 MAX_COMMAND = 200_000
 
@@ -56,7 +59,7 @@ def strip_code(text):
 
 
 def words(text):
-    return re.findall(r"[A-Za-z][A-Za-z'-]*", text)
+    return re.findall(r"[^\W\d_][\w'-]*", text)
 
 
 def count(term, low):
@@ -73,14 +76,17 @@ def score(text, base=None):
     low, n = text.lower(), max(len(words(text)), 1)
     own = (base or {}).get("tell_rates", {})
     hits = {}
-    for t, w in TELLS.items():
+    drift = {w: 1 for w in (base or {}).get("drift", {})}
+    for t, w in {**TELLS, **drift}.items():
         extra = count(t, low) - allowance(own.get(t, 0), n)
         if extra > 0:
             hits[t] = extra * w
     extra = len(DASHES.findall(text)) - allowance((base or {}).get("rates", {}).get("dashes", 0), n)
     if extra > 0:
         hits["dashes"] = 2 * extra
-    return round(100 * sum(hits.values()) / n, 2), dict(sorted(hits.items(), key=lambda kv: -kv[1]))
+    ranked = dict(sorted(hits.items(), key=lambda kv: -kv[1]))
+    # top 3 per 100 words (floor 100): summing every hit measures length, not machine voice
+    return round(100 * sum(list(ranked.values())[:3]) / max(n, 100), 2), ranked
 
 
 def strip_replies(text):
@@ -122,7 +128,32 @@ def pct(xs, q):
     return xs[min(len(xs) - 1, int(q * len(xs)))] if xs else 0
 
 
-def build(paths, lines=False):
+def drift_words(before, recent, limit=60):
+    """Words much more frequent in the user's recent text than in their earlier text."""
+    def counts(docs):
+        c, caps, n = collections.Counter(), collections.Counter(), 0
+        for d in docs:
+            for w in words(strip_code(d)):
+                if any(ch.isdigit() for ch in w) or len(w) < 3:
+                    continue
+                c[w.lower()] += 1
+                caps[w.lower()] += w[0].isupper()
+                n += 1
+        return c, caps, max(n, 1)
+    b, _, nb = counts(before)
+    r, caps, nr = counts(recent)
+    spread = collections.Counter(w for d in recent for w in {x.lower() for x in words(strip_code(d))})
+    out = {}
+    for w, c in r.items():
+        if spread[w] < max(3, 0.05 * len(recent)) or caps[w] > c / 2:
+            continue
+        rr, br = 1000 * c / nr, 1000 * max(b[w], 0.5) / nb
+        if rr >= 0.3 and rr / br >= 4:
+            out[w] = round(min(rr / br, 50.0), 1)
+    return dict(sorted(out.items(), key=lambda kv: -kv[1])[:limit])
+
+
+def build(paths, lines=False, recent=()):
     docs = list(units(paths, lines))
     if not docs:
         sys.exit("no .md/.txt/.markdown text found in " + " ".join(paths))
@@ -143,13 +174,15 @@ def build(paths, lines=False):
                   "soft_pause_dots": per_k(len(re.findall(r"(?<!\.)\.\.(?!\.)", body))), "ellipses": per_k(body.count("...") + body.count("…")),
                   "emoji": per_k(len(EMOJI.findall(body))),
                   "contractions": per_k(len(re.findall(r"\b\w+(n't|'re|'ll|'ve|'m|'d)\b", low))),
-                  "signoffs": per_k(len(SIGNOFF.findall(body)))},
-        "tell_rates": {t: r for t in TELLS if (r := per_k(count(t, low)))},
+                  "signoffs": per_k(sum(len(d.strip().splitlines()) >= 3 and bool(SIGNOFF.match(d.strip().splitlines()[-1].strip())) for d in docs))},
     }
+    if recent:
+        base["drift"] = drift_words(docs, list(units(recent, lines)))
+    base["tell_rates"] = {t: r for t in list(TELLS) + list(base.get("drift", {})) if (r := per_k(count(t, low)))}
     own = [score(d, base)[0] for d in docs if len(words(strip_code(d))) >= MIN_WORDS]
     base["calibration_texts"] = len(own)
-    base["warn"] = max(1.0, pct(own, 0.95)) if own else 1.0
-    base["deny"] = max(2.0, round(1.5 * pct(own, 0.99), 2)) if len(own) >= MIN_CALIBRATION else None
+    base["warn"] = max(WARN_FLOOR, pct(own, 0.95)) if own else WARN_FLOOR
+    base["deny"] = max(DENY_FLOOR, round(1.5 * pct(own, 0.99), 2)) if len(own) >= MIN_CALIBRATION else None
     if base["deny"] is None:
         base["note"] = f"deny mode needs {MIN_CALIBRATION}+ texts of {MIN_WORDS}+ words; the guard will only ask"
     os.makedirs(HOME, exist_ok=True)
@@ -167,7 +200,7 @@ def load(path=None):
             return None
         if base.get("deny") is not None and not numeric(base["deny"]):
             return None
-        for key in ("tell_rates", "rates"):
+        for key in ("tell_rates", "rates", "drift"):
             rates = base.get(key, {})
             if not isinstance(rates, dict) or any(not numeric(v) or v < 0 for v in rates.values()):
                 return None
@@ -180,6 +213,10 @@ PASTED = re.compile(r"```|~~~|https?://\S{60,}|[A-Za-z0-9+/=_-]{40,}|^\s*>|^\s*[
                     r"|[{};]\s*$|^\s*(def|class|import|from|function|const|let|var|return|SELECT|\$)\b", re.M)
 
 
+HARNESS = re.compile(r"skill instructions were previously loaded|response above was stopped|Request interrupted by user"
+                     r"|session is being continued|tool use was rejected|This is an automated", re.I)
+
+
 def claude_prompts(root="~/.claude/projects"):
     """What the user typed to Claude Code, minus what looks pasted (code, multi-line blocks, long walls of text)."""
     for f in sorted(glob.glob(os.path.join(os.path.expanduser(root), "*", "*.jsonl"))):
@@ -189,7 +226,9 @@ def claude_prompts(root="~/.claude/projects"):
             except ValueError:
                 continue
             c = (e.get("message") or {}).get("content")
-            if e.get("type") != "user" or not isinstance(c, str) or c.lstrip().startswith(("<", "[", "Caveat:")):
+            if e.get("type") != "user" or e.get("isMeta") or e.get("isCompactSummary") or not isinstance(c, str):
+                continue
+            if c.lstrip().startswith(("<", "[", "(", "!", "/", "Caveat:")) or HARNESS.search(c):
                 continue
             if c.count("\n") > 1 or PASTED.search(c):
                 continue
@@ -442,16 +481,18 @@ def decide(call, base, mode):
     if not text or ESCAPE.search(strip_code(text)) or len(words(strip_code(text))) < MIN_WORDS:
         return None
     s, hits = score(text, base)
-    warn = base["warn"] if base else 1.0
-    if s < warn:
+    warn = base["warn"] if base else WARN_FLOOR
+    rates = (base or {}).get("rates")
+    dash_rule = "dashes" in hits and (base is None or (isinstance(rates, dict) and rates.get("dashes", 0) < 0.1))
+    if s < warn and not dash_rule:
         return None
     msg = (f"voiceprint: this text scores {s} (your own writing stays under {warn}). Over your usual rate: "
-           f"{', '.join(list(hits)[:5])}. Rewrite the listed words in the user's voice. If a term is truly needed, leave it and let the user approve the prompt.")
+           f"{', '.join(list(hits)[:5])}{' (you never use dashes)' if dash_rule else ''}. Rewrite the listed words in the user's voice. If a term is truly needed, leave it and let the user approve the prompt.")
     if not base:
         msg += " No baseline yet: run /voiceprint:voice-init."
     if mode == "note":
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}
-    deny = mode == "deny" and base and base.get("deny") and s >= base["deny"]
+    deny = mode == "deny" and base and (dash_rule or (base.get("deny") and s >= base["deny"]))
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny" if deny else "ask",
                                    "permissionDecisionReason": msg}}
 
@@ -483,7 +524,7 @@ def selftest():
     ai = ("We will delve into a robust and seamless ecosystem — it's not just a tool, it plays a crucial role. "
           "Moreover, this comprehensive paradigm will ultimately unlock a vibrant landscape for every team today.")
     human = "Fixed the retry loop. It was retrying on 404 too, which never succeeds. Now only 5xx retries, max 3. " * 2
-    assert score(ai)[0] > 10 and score(human)[0] == 0, (score(ai), score(human))
+    assert score(ai)[0] >= 5 and score(human)[0] == 0, (score(ai), score(human))
     assert "delve" not in score(ai, {"tell_rates": {"delve": 50.0}})[1]
     spam = " ".join(["delve"] * 30 + ["word"] * 70)
     assert score(spam, {"tell_rates": {"delve": 0.5}})[0] > 25, "a rare own word must not exempt repetition"
@@ -658,6 +699,16 @@ def selftest():
     ok = {"tool_name": "Bash", "tool_input": {"command": "gh pr comment 1 --body " + shlex.quote(ai + " voice-ok")}}
     assert decide(ok, None, "deny") is None
     assert decide(sneaky, {"warn": 1.0, "deny": 2.0}, "deny")["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert words("שלום עולם hello") == ["שלום", "עולם", "hello"]
+    one_dash = "Fixed the retry loop today " + "and it works now " * 6 + "\u2014 done."
+    dcall = {"tool_name": "Bash", "tool_input": {"command": "gh pr comment 1 --body " + shlex.quote(one_dash)}}
+    assert decide(dcall, {"warn": 50.0, "deny": None, "rates": {"dashes": 0.0}}, "ask")["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert decide(dcall, {"warn": 50.0, "deny": None, "rates": {"dashes": 5.0}}, "ask") is None
+    before = ["we fixed the cache and shipped the change today"] * 10
+    recent = ["nothing here is load bearing and nothing changed, the fix plainly holds"] * 10
+    d = drift_words(before, recent)
+    assert "nothing" in d and "fixed" not in d and "the" not in d, d
+    assert score("nothing " * 30, {"drift": {"nothing": 16.0}})[0] >= 20
     print("selftest ok")
 
 
@@ -666,12 +717,14 @@ if __name__ == "__main__":
     if not a or a[0] in ("-h", "--help"):
         print(__doc__)
     elif a[0] == "build":
-        b = build([p for p in a[1:] if p != "--lines"], "--lines" in a)
-        print(json.dumps({k: v for k, v in b.items() if k != "tell_rates"}, indent=1))
+        rest = a[1:]
+        cut = rest.index("--recent") if "--recent" in rest else len(rest)
+        b = build([p for p in rest[:cut] if p != "--lines"], "--lines" in rest, [p for p in rest[cut + 1:] if p != "--lines"])
+        print(json.dumps({k: v for k, v in b.items() if k != "tell_rates"}, indent=1, ensure_ascii=False))
     elif a[0] == "score":
         t = score_input(a[1:])
         s, hits = score(t, load())
-        print(json.dumps({"score": s, "hits": hits, "warn_at": (load() or {}).get("warn", 1.0)}))
+        print(json.dumps({"score": s, "hits": hits, "warn_at": (load() or {}).get("warn", WARN_FLOOR)}))
     elif a[0] == "claude-prompts":
         seen = set()
         for p in claude_prompts():

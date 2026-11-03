@@ -53,12 +53,14 @@ import sys
 home = Path(os.path.expanduser(os.environ.get("VOICEPRINT_HOME") or "~/.voiceprint"))
 script = Path(os.environ["CLAUDE_PLUGIN_ROOT"]) / "scripts" / "voiceprint.py"
 chat_names = {"claude", "claude-prompts", "slack", "whatsapp", "telegram", "discord"}
-folders = sorted(p for p in (home / "corpus").iterdir() if p.is_dir())
+folders = sorted(p for p in (home / "corpus").iterdir() if p.is_dir() and p.name != "recent")
+recent = home / "corpus" / "recent"
 for chat in (False, True):
     sources = [str(p) for p in folders if (p.name.lower() in chat_names) == chat]
     if sources:
         env = dict(os.environ, VOICEPRINT_HOME=str(home / "chat" if chat else home))
-        subprocess.run([sys.executable, str(script), "build", *sources] + (["--lines"] if chat else []),
+        extra = ["--lines"] if chat else (["--recent", str(recent)] if recent.is_dir() else [])
+        subprocess.run([sys.executable, str(script), "build", *sources] + extra,
                        env=env, check=True)
 PY
 ```
@@ -66,6 +68,8 @@ PY
 The outputs are `${VOICEPRINT_HOME:-$HOME/.voiceprint}/baseline.json` for long form and `${VOICEPRINT_HOME:-$HOME/.voiceprint}/chat/baseline.json` for chat, built with `--lines`. Each measures sentence lengths, short-message share, dash, emoji, contraction and sign-off rates, which AI-tell words they actually use, and the warn and deny lines. Files over 5 MB are skipped with a warning. `.md`, `.txt` and `.markdown` extensions are case-insensitive. The builder also strips quoted replies and reply/forward tails.
 
 Slack sends use the chat baseline when available, otherwise the default. GitHub and git sends use the default baseline.
+
+**Drift.** Text the user wrote after they started using AI tools (posts, PR bodies, long messages after their cutoff date) goes in `corpus/recent/`, not in the voice corpus. The long-form build compares it with their earlier writing and stores the words that became much more frequent as `drift` in `baseline.json`: their personal AI tells. Show the list. Topic words (a product they started working on, a new tool) are not tells: remove them from `drift` in the JSON with the user before moving on. With under about 5,000 words of earlier writing the list is noisy, so say so.
 
 ## 3. Write the profile
 
