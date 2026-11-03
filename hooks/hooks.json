@@ -1,0 +1,17 @@
+{
+  "description": "voiceprint prose guard: scores text leaving through gh pr/issue, git commit and Slack tools against the user's own baseline",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py\" hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

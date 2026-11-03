@@ -1,0 +1,15 @@
+{
+  "name": "voiceprint",
+  "owner": { "name": "Nahum Litvin", "url": "https://github.com/NahumLitvin" },
+  "description": "voiceprint: your own writing voice and prose guard for Claude Code.",
+  "plugins": [
+    {
+      "name": "voiceprint",
+      "source": "./",
+      "description": "Build your own writing voice from your own posts and messages, and a prose guard that flags text that doesn't sound like you.",
+      "version": "0.1.0",
+      "category": "productivity",
+      "tags": ["writing", "voice", "style"]
+    }
+  ]
+}
