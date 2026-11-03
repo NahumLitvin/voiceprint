@@ -5,7 +5,7 @@ description: Build the user's own writing voice from their own publications and 
 
 # voice-init
 
-Builds the user's voice from text they wrote. Files are stored in `${VOICEPRINT_HOME:-~/.voiceprint}`, called HOME below. Never upload, commit or quote the corpus anywhere else. Tell the user up front that samples you read pass through this conversation, then start with `mkdir -p "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus"`.
+Builds the user's voice from text they wrote. Files are stored in `${VOICEPRINT_HOME:-$HOME/.voiceprint}`. Never upload, commit or quote the corpus anywhere else. Tell the user up front that samples you read pass through this conversation, then start with `mkdir -p "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus"`.
 
 ## 1. Find sources, ask, then collect
 
@@ -16,11 +16,12 @@ Show the user one menu of what you found and what each would collect, and get an
 Rules for every source:
 - Only text the user wrote. Never save other people's messages, even from a chat they were in.
 - Skip what they pasted or had AI draft, when they can point to it.
-- Save plain text under `HOME/corpus/<source>/` (create the folder first): one `.md` per post for long form, one message per line in a `.txt` for chat.
+- Save plain text under `${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus/<source>/` (create the folder first): one `.md` per post for long form, one message per line in a `.txt` for chat.
+- For any email source, strip quoted replies and forwarded text before saving. Keep only the user's new text, even when the quoted text was originally theirs.
 
 | Source | How |
 |---|---|
-| Claude Code prompts | `mkdir -p HOME/corpus/claude && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" claude-prompts > HOME/corpus/claude/prompts.txt` (their most casual register; the collector drops prompts that look pasted, such as code, quotes, long lines and multi-line blocks, but not all of them, so preview it) |
+| Claude Code prompts | `mkdir -p "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus/claude" && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" claude-prompts > "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus/claude/prompts.txt"` (their most casual register; the collector drops prompts that look pasted, such as code, quotes, long lines and multi-line blocks, but not all of them, so preview it) |
 | Past sessions | If a session-search CLI like `recall` is installed, search their own messages with it |
 | Blog, Medium, dev.to, Substack | The posts they name or the RSS feed; dev.to has `https://dev.to/api/articles?username=<name>` |
 | LinkedIn | Their data export (Settings, Data privacy, Get a copy of your data) has `Shares.csv` and `Comments.csv` |
@@ -28,8 +29,9 @@ Rules for every source:
 | Hacker News | `https://hn.algolia.com/api/v1/search_by_date?tags=comment,author_<name>&hitsPerPage=1000` |
 | X / Twitter | Their archive's `data/tweets.js`, without retweets |
 | Bluesky, Mastodon | Their public author feed through the site's API |
-| GitHub | `gh search prs --author=@me --limit 200 --json body --jq '.[].body'`, plus issue comments; drop bot templates |
-| Slack, Gmail, Notion | The connected MCP tool, searching only what they sent (`from:me`, Sent mail) |
+| GitHub | PR bodies are often AI-written. Ask for a cutoff date before they used AI writing tools, then search their PRs before that date with `gh` and preview the bodies with them. Drop bot templates and bodies that score high with `score -`; include only text they confirm they wrote. Apply the same checks to issue comments. |
+| Slack, Notion | The connected MCP tool, searching only what they sent (`from:me`) |
+| Gmail and other email | The connected tool or a Sent mail export, keeping only what they sent. Strip quoted replies and forwarded text before saving, then preview the remaining text. |
 | Telegram | Telegram Desktop, Export chat history, JSON; keep messages whose `from_id` is theirs, or use the MCP tool if connected |
 | WhatsApp | The chat export `.txt`, or the MCP tool if connected; keep only their lines |
 | Discord | Their data package, `messages/*/messages.json` |
@@ -39,21 +41,41 @@ Keep long form and chat in separate folders: they are different registers. Some 
 
 ## 2. Measure
 
+Use a separate top-level source folder for each register. Chat folder names are `claude` (Claude prompts), `slack`, `whatsapp`, `telegram` and `discord`. Build every other folder into the default baseline. This command discovers all source folders, including any long-form sources beyond posts and PRs:
+
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" build "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus/posts" "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus/prs"
+python3 - <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+home = Path(os.path.expanduser(os.environ.get("VOICEPRINT_HOME") or "~/.voiceprint"))
+script = Path(os.environ["CLAUDE_PLUGIN_ROOT"]) / "scripts" / "voiceprint.py"
+chat_names = {"claude", "claude-prompts", "slack", "whatsapp", "telegram", "discord"}
+folders = sorted(p for p in (home / "corpus").iterdir() if p.is_dir())
+for chat in (False, True):
+    sources = [str(p) for p in folders if (p.name.lower() in chat_names) == chat]
+    if sources:
+        env = dict(os.environ, VOICEPRINT_HOME=str(home / "chat" if chat else home))
+        subprocess.run([sys.executable, str(script), "build", *sources] + (["--lines"] if chat else []),
+                       env=env, check=True)
+PY
 ```
 
-For a chat folder add `--lines` and build it separately into its own home, for example `VOICEPRINT_HOME=~/.voiceprint/chat`. The output is `baseline.json`: sentence lengths, short-message share, dash, emoji, contraction and sign-off rates, which AI-tell words they actually use, and the warn and deny lines the guard uses.
+The outputs are `${VOICEPRINT_HOME:-$HOME/.voiceprint}/baseline.json` for long form and `${VOICEPRINT_HOME:-$HOME/.voiceprint}/chat/baseline.json` for chat, built with `--lines`. Each measures sentence lengths, short-message share, dash, emoji, contraction and sign-off rates, which AI-tell words they actually use, and the warn and deny lines. Files over 5 MB are skipped with a warning. `.md`, `.txt` and `.markdown` extensions are case-insensitive. The builder also strips quoted replies and reply/forward tails.
+
+Slack sends use the chat baseline when available, otherwise the default. GitHub and git sends use the default baseline.
 
 ## 3. Write the profile
 
-Read 20 to 30 samples across sources, then write `HOME/profile.md` with these sections, each backed by numbers from `baseline.json` or quotes from the samples:
+Read 20 to 30 samples across sources, then write `${VOICEPRINT_HOME:-$HOME/.voiceprint}/profile.md` with these sections, each backed by numbers from the two baselines or quotes from the samples:
 
 - **Rhythm**: sentence and message length, how paragraphs open and close.
 - **Punctuation and marks**: what they use and what they never use (dashes, `!`, emoji, lowercase starts).
 - **Words**: phrases they reach for, words they never write, how they swear or joke.
 - **Structure**: how a post opens (story, number, claim), how it ends, lists or none.
-- **Per medium**: how chat differs from long form.
+- **Per medium**: separate chat and long-form sections, including how they differ.
 - **Never**: the things that would make a reader say "this isn't them".
 
 Show the profile to the user and fix what they say is wrong. Their correction beats the numbers.

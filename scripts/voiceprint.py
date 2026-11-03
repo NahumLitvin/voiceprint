@@ -8,13 +8,15 @@
   voiceprint.py selftest
 """
 import glob, json, math, os, re, shlex, statistics, sys
+from collections import deque
 
 HOME = os.path.expanduser(os.environ.get("VOICEPRINT_HOME", "~/.voiceprint"))
 BASELINE = os.path.join(HOME, "baseline.json")
 ESCAPE = re.compile(r"(?<![\w-])voice-ok(?![\w-])")
 MIN_WORDS = 25
 MIN_CALIBRATION = 5
-MAX_FILE = 1_000_000
+MAX_FILE = 5_000_000
+MAX_COMMAND = 200_000
 
 # Words and phrases that mark machine-written English. Public knowledge, not anyone's voice.
 # 2023 register: the classic ChatGPT vocabulary, now rarer.
@@ -39,8 +41,8 @@ TELLS.update({p: 2 for p in [
 DASHES = re.compile(r"—|–| -- ")
 EMOJI = re.compile(r"[\U0001F300-\U0001FAFF☀-➿]")
 SIGNOFF = re.compile(r"^(thanks|thank you|best|regards|cheers|sincerely|warmly)\b[^\n]{0,30}$", re.I | re.M)
-HEREDOC = re.compile(r"<<-?[ \t]*(['\"]?)(\w+)\1([^\n]*)\n(.*?)\n[ \t]*\2[ \t]*(?:\n|$)", re.S)
-SLACK_SEND = {"post", "send", "reply", "update", "edit", "postmessage"}
+HEREDOC_START = re.compile(r"(?<!<)<<(-?)[ \t]*(['\"]?)([\w-]+)\2")
+SLACK_SEND = {"post", "send", "reply", "update", "edit", "postmessage", "schedule", "scheduled", "schedulemessage", "scheduledmessage"}
 SLACK_SKIP = {"search", "read", "list", "get", "history", "info", "lookup", "draft", "drafts"}
 
 
@@ -61,29 +63,58 @@ def count(term, low):
     return len(re.findall(r"(?<![\w-])" + re.escape(term) + r"(?![\w-])", low))
 
 
+def allowance(rate, n):
+    return (1 if rate >= 0.5 else 0) + 2 * rate * n / 1000
+
+
 def score(text, base=None):
-    """Tell density per 100 words. Each tell is allowed up to twice the rate you use it in your own writing."""
+    """Tell density per 100 words after the user's fractional allowance."""
     text = strip_code(text)
     low, n = text.lower(), max(len(words(text)), 1)
     own = (base or {}).get("tell_rates", {})
     hits = {}
     for t, w in TELLS.items():
-        extra = count(t, low) - math.floor(2 * own.get(t, 0) * n / 1000)
+        extra = count(t, low) - allowance(own.get(t, 0), n)
         if extra > 0:
             hits[t] = extra * w
-    extra = len(DASHES.findall(text)) - math.floor(2 * (base or {}).get("rates", {}).get("dashes", 0) * n / 1000)
+    extra = len(DASHES.findall(text)) - allowance((base or {}).get("rates", {}).get("dashes", 0), n)
     if extra > 0:
         hits["dashes"] = 2 * extra
     return round(100 * sum(hits.values()) / n, 2), dict(sorted(hits.items(), key=lambda kv: -kv[1]))
 
 
+def strip_replies(text):
+    kept = []
+    for line in text.splitlines():
+        if re.match(r"^\s*On .+ wrote:\s*$", line, re.I) or re.match(
+                r"^\s*(?:-+\s*(?:Original Message|Forwarded message)\s*-+|Begin forwarded message:)", line, re.I):
+            break
+        if not line.lstrip().startswith(">"):
+            kept.append(line)
+    return "\n".join(kept)
+
+
 def units(paths, lines):
     for p in paths:
+        found = False
         files = [os.path.join(r, f) for r, _, fs in os.walk(p) for f in fs] if os.path.isdir(p) else [p]
         for f in sorted(files):
-            if f.endswith((".md", ".txt", ".markdown")):
-                t = open(f, encoding="utf-8", errors="ignore").read()
-                yield from (u.strip() for u in (t.splitlines() if lines else [t]) if u.strip())
+            if not f.lower().endswith((".md", ".txt", ".markdown")):
+                continue
+            try:
+                if os.path.getsize(f) > MAX_FILE:
+                    print("warning: skipping file over 5 MB: " + f, file=sys.stderr)
+                    continue
+                with open(f, encoding="utf-8", errors="replace") as source:
+                    t = strip_replies(source.read(MAX_FILE))
+            except OSError:
+                continue
+            for u in (t.splitlines() if lines else [t]):
+                if strip_code(u).strip():
+                    found = True
+                    yield u.strip()
+        if not found:
+            print("warning: missing path or no text: " + p, file=sys.stderr)
 
 
 def pct(xs, q):
@@ -94,7 +125,7 @@ def pct(xs, q):
 def build(paths, lines=False):
     docs = list(units(paths, lines))
     if not docs:
-        sys.exit("no .md/.txt text found in " + " ".join(paths))
+        sys.exit("no .md/.txt/.markdown text found in " + " ".join(paths))
     body = "\n".join(strip_code(d) for d in docs)
     low, allw = body.lower(), max(len(words(body)), 1)
     per_k = lambda c: round(1000 * c / allw, 2)
@@ -122,14 +153,26 @@ def build(paths, lines=False):
     if base["deny"] is None:
         base["note"] = f"deny mode needs {MIN_CALIBRATION}+ texts of {MIN_WORDS}+ words; the guard will only ask"
     os.makedirs(HOME, exist_ok=True)
-    json.dump(base, open(BASELINE, "w"), indent=1)
+    with open(BASELINE, "w", encoding="utf-8", errors="replace") as target:
+        json.dump(base, target, indent=1)
     return base
 
 
-def load():
+def load(path=None):
     try:
-        return json.load(open(BASELINE))
-    except (OSError, ValueError):
+        with open(path or BASELINE, encoding="utf-8", errors="replace") as source:
+            base = json.load(source)
+        numeric = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+        if not isinstance(base, dict) or not numeric(base.get("warn")):
+            return None
+        if base.get("deny") is not None and not numeric(base["deny"]):
+            return None
+        for key in ("tell_rates", "rates"):
+            rates = base.get(key, {})
+            if not isinstance(rates, dict) or any(not numeric(v) or v < 0 for v in rates.values()):
+                return None
+        return base
+    except (OSError, ValueError, OverflowError):
         return None
 
 
@@ -140,7 +183,7 @@ PASTED = re.compile(r"```|~~~|https?://\S{60,}|[A-Za-z0-9+/=_-]{40,}|^\s*>|^\s*[
 def claude_prompts(root="~/.claude/projects"):
     """What the user typed to Claude Code, minus what looks pasted (code, multi-line blocks, long walls of text)."""
     for f in sorted(glob.glob(os.path.join(os.path.expanduser(root), "*", "*.jsonl"))):
-        for line in open(f, errors="ignore"):
+        for line in open(f, encoding="utf-8", errors="replace"):
             try:
                 e = json.loads(line)
             except ValueError:
@@ -158,18 +201,31 @@ def claude_prompts(root="~/.claude/projects"):
 def read_file(path, cwd):
     p = os.path.join(cwd, os.path.expanduser(path))
     try:
-        return open(p, errors="ignore").read(MAX_FILE) if os.path.isfile(p) else None
+        with open(p, encoding="utf-8", errors="replace") as source:
+            return source.read(MAX_FILE)
     except OSError:
         return None
 
 
-def send_args(toks):
-    """(args after the send subcommand, git -C dirs) when the tokens are a gh or git send, else None."""
+def command_tokens(toks):
+    if toks and os.path.basename(toks[0]).lower() in ("env", "env.exe"):
+        toks = toks[1:]
     while toks and re.match(r"^\w+=", toks[0]):
         toks = toks[1:]
+    return toks
+
+
+def basename(path):
+    name = path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def send_args(toks):
+    """(args after the send subcommand, git -C dirs) when the tokens are a gh or git send, else None."""
+    toks = command_tokens(toks)
     if not toks:
         return None
-    prog, i, dirs = os.path.basename(toks[0]), 1, []
+    prog, i, dirs = basename(toks[0]), 1, []
     if prog == "git":
         while i < len(toks) and toks[i].startswith("-"):
             if toks[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace") and i + 1 < len(toks):
@@ -179,62 +235,179 @@ def send_args(toks):
                 i += 1
         return (toks[i + 1:], dirs) if i < len(toks) and toks[i] == "commit" else None
     if prog == "gh":
-        while i < len(toks) and toks[i].startswith("-"):
-            i += 2 if toks[i] in ("-R", "--repo", "--hostname") else 1
-        if i + 1 < len(toks) and toks[i] in ("pr", "issue") and toks[i + 1] in ("create", "comment", "edit", "review"):
-            return toks[i + 2:], dirs
+        noun = None
+        while i < len(toks):
+            t = toks[i]
+            if t.startswith("-"):
+                i += 2 if t in ("-R", "--repo", "--hostname") else 1
+            elif noun is None and t in ("pr", "issue"):
+                noun, i = t, i + 1
+            else:
+                return (toks[i + 1:], dirs) if noun and t in ("create", "comment", "edit", "review") else None
     return None
 
 
-def bash_text(cmd, cwd):
-    """Bodies of gh/git sends in a shell command; heredocs count only when the send consumes them."""
-    if not re.search(r"\b(git|gh)\b", cmd):
+def heredocs(cmd):
+    bodies, flat, pending = {}, [], deque()
+    for line in cmd.splitlines(keepends=True):
+        if pending:
+            key, delimiter, tabs = pending[0]
+            end = line.rstrip("\r\n")
+            if (end.lstrip("\t") if tabs else end) == delimiter:
+                pending.popleft()
+            else:
+                bodies[key].append(line.lstrip("\t") if tabs else line)
+            continue
+        def hold(m):
+            key = "VPHEREDOC" + str(len(bodies))
+            bodies[key] = []
+            pending.append((key, m[3], bool(m[1])))
+            return "<<" + key
+        flat.append(HEREDOC_START.sub(hold, line))
+    return "".join(flat), {k: "".join(v)[:-1] if v and v[-1].endswith("\n") else "".join(v) for k, v in bodies.items()}
+
+
+def substitutions(cmd):
+    flat, subs, i = [], {}, 0
+    while i < len(cmd):
+        if cmd.startswith("$(", i):
+            start, depth, quote = i + 2, 1, None
+            i += 2
+            while i < len(cmd) and depth:
+                c = cmd[i]
+                if c == "\\":
+                    i += 2
+                    continue
+                if quote:
+                    if c == quote:
+                        quote = None
+                elif c in ("'", '"'):
+                    quote = c
+                elif c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+                i += 1
+            key = "VPSUB" + str(len(subs))
+            subs[key] = cmd[start:i - 1] if depth == 0 else ""
+            flat.append(key)
+        else:
+            flat.append(cmd[i])
+            i += 1
+    return "".join(flat), subs
+
+
+def bash_text(cmd, cwd, written=None, depth=0):
+    """Read send bodies without executing shell commands."""
+    if len(cmd) > MAX_COMMAND or depth > 10:
         return None
-    bodies = {}
-    def hold(m):
-        key = f"VPHEREDOC{len(bodies)}"
-        bodies[key] = m.group(4)
-        return f"<<{key}{m.group(3)}\n"
-    flat = HEREDOC.sub(hold, cmd).replace("\n", " ;\n")
+    written = {} if written is None else written
+    flat, bodies = heredocs(cmd.replace("\\\n", ""))
+    flat, subs = substitutions(flat)
     try:
-        lex = shlex.shlex(flat, posix=True, punctuation_chars=True)
+        lex = shlex.shlex(flat, posix=True, punctuation_chars="();<>|&\n")
+        lex.whitespace = " \t\r"
         lex.whitespace_split = True
-        toks = list(lex)
+        toks = []
+        for token in lex:
+            toks.extend(re.findall(r"&&|\|\||;;|<<<|<<|>>|[();<>|&\n]", token)
+                        if re.fullmatch(r"[();<>|&\n]+", token) else [token])
     except ValueError:
         return None
-    keys = lambda seg: [k for t in seg for k in re.findall(r"VPHEREDOC\d+", t)]
+    def path(f, here):
+        return os.path.normcase(os.path.abspath(os.path.join(here, os.path.expanduser(f))))
+    def value(arg, here):
+        if arg in subs:
+            try:
+                inner = shlex.split(subs[arg])
+            except ValueError:
+                return ""
+            if len(inner) == 2 and inner[0] == "cat" and not inner[1].startswith("<<"):
+                f = path(inner[1], here)
+                return written[f] if f in written else read_file(inner[1], here) or ""
+            if len(inner) == 3 and inner[:2] == ["cat", "<<"]:
+                return bodies.get(inner[2], "")
+            if len(inner) == 2 and inner[0] == "cat" and inner[1].startswith("<<"):
+                return bodies.get(inner[1][2:], "")
+        return re.sub(r"VPSUB\d+", "", arg)
     segs, cur = [], []
     for t in toks + [";"]:
-        if t in ("&&", "||", ";", "|", "&", ";;"):
+        if t in ("&&", "||", ";", "|", "&", ";;", "\n", "(", ")"):
             segs.append((cur, t))
             cur = []
         else:
             cur.append(t)
-    here, parts, piped = cwd or os.getcwd(), [], []
+    here, parts, piped, stack = cwd or os.getcwd(), [], "", []
     for seg, op in segs:
+        seg = command_tokens(seg)
         if seg[:1] == ["cd"] and len(seg) > 1:
-            here = os.path.join(here, os.path.expanduser(seg[1]))
+            here = path(seg[1], here)
+        stdin = piped
+        for i, t in enumerate(seg[:-1]):
+            if t == "<<":
+                stdin = bodies.get(seg[i + 1], "")
+            elif t == "<<<":
+                stdin = value(seg[i + 1], here)
+        prog = basename(seg[0]) if seg else ""
+        output = stdin
+        if prog in ("echo", "printf"):
+            args = seg[1:]
+            args = args[:next((i for i, t in enumerate(args) if t in (">", ">>", "<", "<<", "<<<")), len(args))]
+            if prog == "echo":
+                output = " ".join(value(t, here) for t in args if t not in ("-n", "-e", "-E"))
+            elif args:
+                fmt, vals = args[0], [value(t, here) for t in args[1:]]
+                fmt = re.sub(r"\\([nrt\\])", lambda m: {"n": "\n", "r": "\r", "t": "\t", "\\": "\\"}[m[1]], value(fmt, here))
+                slots = sum(t != "%%" for t in re.findall(r"%[sb%]", fmt))
+                values = iter(vals)
+                output = "".join(re.sub(r"%([sb%])", lambda m: "%" if m[1] == "%" else next(values, ""), fmt)
+                                 for _ in range(0, max(1, len(vals)), slots or max(1, len(vals))))
+        if prog in ("cat", "tee", "echo", "printf"):
+            for i, t in enumerate(seg[:-1]):
+                if t in (">", ">>"):
+                    f = path(seg[i + 1], here)
+                    written[f] = (written.get(f, "") if t == ">>" else "") + output
+            if prog == "tee":
+                for f in seg[1:]:
+                    if f in ("<<", "<<<", ">", ">>"):
+                        break
+                    if not f.startswith("-"):
+                        written[path(f, here)] = output
+        if prog in ("bash", "sh") and "-c" in seg and seg.index("-c") + 1 < len(seg):
+            inner = re.sub(r"VPSUB\d+", lambda m: "$(" + subs[m[0]] + ")", seg[seg.index("-c") + 1])
+            parts.append(bash_text(inner, here, written, depth + 1) or "")
         found = send_args(seg)
         if found:
             args, dirs = found
-            base, used = os.path.join(here, *dirs), []
-            for i, t in enumerate(args):
+            base = here
+            for directory in dirs:
+                base = path(directory, base)
+            i = 0
+            while i < len(args):
+                t = args[i]
                 nxt = args[i + 1] if i + 1 < len(args) else ""
-                k, _, v = t.partition("=")
-                arg = (nxt if t in ("-m", "--message", "-b", "--body") else v if k in ("--message", "--body") and v
-                       else t[2:] if t.startswith("-m") and len(t) > 2 and not t.startswith("--") else None)
-                if arg is not None and keys([arg]):
-                    used += keys([arg])
-                    parts += [bodies[k2] for k2 in keys([arg])]
-                elif arg is not None and "$(" not in arg:
-                    parts.append(arg.replace(" ;\n", "\n"))
-                if t in ("-F", "--body-file", "--file") or (k in ("--body-file", "--file") and v):
-                    f = v or nxt
-                    if f == "-":
-                        parts += [bodies[k2] for k2 in keys(seg) + piped if k2 not in used]
-                    else:
-                        parts.append(read_file(f, base) or "")
-        piped = keys(seg) if op == "|" else []
+                k, equal, v = t.partition("=")
+                arg, consumed = None, 1
+                if t in ("-m", "--message", "-b", "--body"):
+                    arg, consumed = nxt, 2
+                elif k in ("--message", "--body") and equal:
+                    arg = v
+                elif re.match(r"^-[asm]*m", t):
+                    arg = t[t.index("m") + 1:] or nxt
+                    consumed = 1 if t[t.index("m") + 1:] else 2
+                if arg is not None:
+                    parts.append(value(arg, base))
+                if t in ("-F", "--body-file", "--file") or (k in ("--body-file", "--file") and equal) or (t.startswith("-F") and len(t) > 2):
+                    f = v if equal else t[2:] if t.startswith("-F") and len(t) > 2 else nxt
+                    consumed = 1 if equal or (t.startswith("-F") and len(t) > 2) else 2
+                    resolved = path(f, base)
+                    parts.append(stdin if f == "-" else written[resolved] if resolved in written else read_file(f, base) or "")
+                i += consumed
+        piped = output if op == "|" else ""
+        if op == "(":
+            stack.append(here)
+        elif op == ")" and stack:
+            here = stack.pop()
     return "\n".join(p for p in parts if p and p.strip()) or None
 
 
@@ -244,12 +417,15 @@ def outgoing_text(call):
     if name == "Bash":
         return bash_text(inp.get("command", ""), call.get("cwd"))
     words_in_name = set(re.split(r"[^a-z]+", name.lower().split("__")[-1]))
-    if "slack" in name.lower() and words_in_name & SLACK_SEND and not words_in_name & SLACK_SKIP:
+    sends = (words_in_name & SLACK_SEND or
+             words_in_name & {"canvas", "canvases"} and words_in_name & {"create", "update"} or
+             {"conversations", "add", "message"} <= words_in_name)
+    if "slack" in name.lower() and sends and not words_in_name & SLACK_SKIP:
         found = []
         def walk(o):
             if isinstance(o, dict):
                 for k, v in o.items():
-                    if isinstance(v, str) and k in ("text", "message", "content", "body", "markdown_text"):
+                    if isinstance(v, str) and k in ("text", "message", "content", "body", "markdown_text", "payload"):
                         found.append(v)
                     else:
                         walk(v)
@@ -270,7 +446,7 @@ def decide(call, base, mode):
     if s < warn:
         return None
     msg = (f"voiceprint: this text scores {s} (your own writing stays under {warn}). Over your usual rate: "
-           f"{', '.join(list(hits)[:5])}. Rewrite those in your voice, or add voice-ok outside code if a term is needed.")
+           f"{', '.join(list(hits)[:5])}. Rewrite the listed words in the user's voice. If a term is truly needed, leave it and let the user approve the prompt.")
     if not base:
         msg += " No baseline yet: run /voiceprint:voice-init."
     if mode == "note":
@@ -282,13 +458,25 @@ def decide(call, base, mode):
 
 def hook():
     try:
-        call = json.load(sys.stdin)
-    except ValueError:
+        call = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace"))
+        base = load()
+        if "slack" in call.get("tool_name", "").lower():
+            base = load(os.path.join(HOME, "chat", "baseline.json")) or base
+        out = decide(call, base, os.environ.get("VOICEPRINT_MODE", "ask"))
+        if out:
+            print(json.dumps(out))
+    except Exception:
         return
-    base = load()
-    out = decide(call, base, os.environ.get("VOICEPRINT_MODE", (base or {}).get("mode", "ask")))
-    if out:
-        print(json.dumps(out))
+
+
+def score_input(args):
+    try:
+        if not args or args[0] == "-":
+            return sys.stdin.buffer.read().decode("utf-8", errors="replace")
+        with open(args[0], encoding="utf-8", errors="replace") as source:
+            return source.read()
+    except OSError as e:
+        sys.exit("cannot read draft: " + str(e))
 
 
 def selftest():
@@ -312,12 +500,141 @@ def selftest():
     assert b("git -C 'my repo' commit -m 'quoted dir'") == "quoted dir"
     assert b("gh --repo owner/repo pr comment 1 --body 'global flag'") == "global flag"
     assert b("echo 'git commit -m nope'") is None
-    import tempfile
+    import contextlib, io, tempfile, time
+    from unittest.mock import patch
     with tempfile.TemporaryDirectory() as td:
         os.mkdir(os.path.join(td, "sub"))
-        open(os.path.join(td, "sub", "msg.txt"), "w").write("in sub")
+        open(os.path.join(td, "sub", "msg.txt"), "w", encoding="utf-8", errors="replace").write("in sub")
         assert b("git -C sub commit -F msg.txt", cwd=td) == "in sub"
         assert b("cd sub && git commit -F msg.txt", cwd=td) == "in sub"
+    for cmd, expected in [
+        ('git commit -am "combined a"', "combined a"),
+        ('git commit -sm "combined s"', "combined s"),
+        ('git commit -amx', "x"),
+        ('gh pr comment 1 \\\n --body "continued"', "continued"),
+        ('env X=1 gh pr comment 1 --body "environment"', "environment"),
+        ("bash -c 'git commit -m inner'", "inner"),
+        ("sh -c 'gh issue comment 1 --body inner'", "inner"),
+        ('gh pr -R o/r comment 1 --body "repo flag"', "repo flag"),
+        ('git.exe commit -m executable', "executable"),
+        ('gh.exe pr comment 1 --body executable', "executable"),
+        ('gh pr comment 1 --body "delve $(date) robust"', "delve  robust"),
+        ('git commit -m "delve $(echo $(date)) robust"', "delve  robust"),
+        ('gh pr comment 1 --body-file - <<< "here string"', "here string"),
+        ('echo "echo body" | gh pr comment 1 --body-file -', "echo body"),
+        ("printf '%s\\n' 'printf body' | gh pr comment 1 --body-file -", "printf body\n"),
+        ("printf 'delve %s' 'robust' | gh pr comment 1 --body-file -", "delve robust"),
+        ("printf '%s ' 'delve' 'robust' | gh pr comment 1 --body-file -", "delve robust "),
+        ('git commit -m "first\nsecond"', "first\nsecond"),
+        ('printf "format only" | gh pr comment 1 --body-file -', "format only"),
+    ]:
+        assert b(cmd) == expected, (cmd, b(cmd))
+    assert score("delve " + "word " * 29, {"tell_rates": {"delve": 0.5}})[0] == 0
+    assert abs(score("delve delve " + "word " * 98, {"tell_rates": {"delve": 2}})[1]["delve"] - 0.6) < 1e-9
+    assert score("word — " + "word " * 29, {"rates": {"dashes": 0.5}})[0] == 0
+    reason = decide({"tool_name": "Bash", "tool_input": {"command": "git commit -m " + shlex.quote(ai)}}, None, "ask")
+    assert "voice-ok" not in reason["hookSpecificOutput"]["permissionDecisionReason"]
+    large = "cat <<EOF\n" + "one line\n" * 20000 + "EOF\ngit commit -m quick"
+    started = time.monotonic()
+    assert b(large) == "quick"
+    assert b("<<EOF\n" * 20000) is None
+    assert time.monotonic() - started < 2, "heredoc parsing must stay below the hook timeout"
+    assert b("git commit -m '" + "x" * MAX_COMMAND + "'") is None
+    with tempfile.TemporaryDirectory() as td:
+        def write(name, text):
+            target = os.path.join(td, name)
+            with open(target, "w", encoding="utf-8", errors="replace") as f:
+                f.write(text)
+            return target
+        os.mkdir(os.path.join(td, "sub"))
+        write("sub/m.txt", "subshell body")
+        write("m.txt", "disk body")
+        assert b('( cd sub && git commit -F m.txt )', cwd=td) == "subshell body"
+        assert b('(cd sub); git commit -F m.txt', cwd=td) == "disk body"
+        for writer in ('cat > m.txt <<EOF', 'cat <<EOF > m.txt', 'tee m.txt <<EOF'):
+            for send in ('gh pr comment 1 --body-file m.txt', 'git commit -F m.txt'):
+                cmd = writer + "\nwritten body\nEOF\n" + send
+                assert b(cmd, cwd=td) == "written body", (cmd, b(cmd, cwd=td))
+        assert b('gh pr comment 1 --body "$(cat m.txt)"', cwd=td) == "disk body"
+        assert b('git commit -m "$(cat m.txt)"', cwd=td) == "disk body"
+        assert b("bash -c " + shlex.quote('git commit -m "$(cat m.txt)"'), cwd=td) == "disk body"
+        raw = os.path.join(td, "raw.TXT")
+        with open(raw, "wb") as f:
+            f.write(b"caf\xc3\xa9 \xff delve")
+        assert read_file("raw.TXT", td) == "café \ufffd delve"
+        assert score_input([raw]) == "café \ufffd delve"
+        assert list(units([raw], False)) == ["café \ufffd delve"]
+        assert list(units([write("hebrew.txt", "שלום לך")], False)) == ["שלום לך"]
+        os.mkdir(os.path.join(td, "project"))
+        transcript = write("project/session.jsonl", json.dumps({"type": "user", "message": {"content": "café can you check this"}}, ensure_ascii=False) + "\n")
+        with open(transcript, "ab") as f:
+            f.write(b'{"type":"user","message":{"content":"please check \xff this"}}\n')
+        assert list(claude_prompts(td)) == ["café can you check this", "please check \ufffd this"]
+        assert strip_replies("mine\n> theirs\nOn Tuesday, Pat wrote:\nquoted") == "mine"
+        assert strip_replies("mine\n---------- Forwarded message ---------\nforwarded") == "mine"
+        for name in ("a.MD", "b.Txt", "c.MARKDOWN"):
+            assert list(units([write(name, "mine\n> delve\nOn Friday Pat wrote:\nrobust")], False)) == ["mine"]
+        huge = write("huge.txt", "x" * (MAX_FILE + 1))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            assert not list(units([huge, os.path.join(td, "missing"), write("empty.txt", "")], False))
+        assert "5 MB" in err.getvalue() and "missing" in err.getvalue() and "empty.txt" in err.getvalue()
+        with contextlib.redirect_stderr(io.StringIO()):
+            try:
+                build([os.path.join(td, "absent")])
+                assert False, "empty corpus must exit"
+            except SystemExit as e:
+                assert "no .md/.txt/.markdown text" in str(e)
+        try:
+            score_input([os.path.join(td, "absent")])
+            assert False, "missing score file must exit"
+        except SystemExit as e:
+            assert "cannot read draft" in str(e)
+        baseline = write("baseline.json", "{}")
+        for invalid in ([], None, "text", {}, {"warn": "one"}, {"warn": 1, "deny": "two"},
+                        {"warn": True}, {"warn": 1, "tell_rates": []}, {"warn": float("nan")},
+                        {"warn": 1, "deny": float("inf")}, {"warn": 10 ** 400}):
+            write("baseline.json", json.dumps(invalid))
+            assert load(baseline) is None, invalid
+        for deny in (None, 2):
+            write("baseline.json", json.dumps({"warn": 1, "deny": deny}))
+            assert load(baseline)["deny"] == deny
+        with patch.dict(globals(), HOME=td, BASELINE=baseline):
+            measured = build([write("own.md", "mine\n> delve\nOn Friday Pat wrote:\nrobust")])
+            assert measured["words"] == 1 and measured["tell_rates"] == {}
+            assert load() == measured
+        def run_hook(payload, mode=None):
+            output = io.StringIO()
+            env = {} if mode is None else {"VOICEPRINT_MODE": mode}
+            with patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(payload), encoding="ascii")), \
+                    patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(output):
+                hook()
+            return output.getvalue()
+        with patch.dict(globals(), HOME=td, BASELINE=baseline):
+            write("baseline.json", json.dumps({"warn": 1, "deny": 2, "mode": "deny"}))
+            sending = {"tool_name": "mcp__slack__chat_post_message", "tool_input": {"text": ai}}
+            assert json.loads(run_hook(json.dumps(sending).encode()))["hookSpecificOutput"]["permissionDecision"] == "ask"
+            assert json.loads(run_hook(json.dumps(sending).encode(), "deny"))["hookSpecificOutput"]["permissionDecision"] == "deny"
+            assert "additionalContext" in json.loads(run_hook(json.dumps(sending).encode(), "note"))["hookSpecificOutput"]
+            assert run_hook(json.dumps(sending).encode())
+            os.mkdir(os.path.join(td, "chat"))
+            write("chat/baseline.json", json.dumps({"warn": 100, "deny": None}))
+            assert run_hook(json.dumps(sending).encode()) == ""
+            git_call = {"tool_name": "Bash", "tool_input": {"command": "git commit -m " + shlex.quote(ai)}}
+            assert run_hook(json.dumps(git_call).encode())
+            gh_call = {"tool_name": "Bash", "tool_input": {"command": "gh pr comment 1 --body " + shlex.quote(ai)}}
+            assert run_hook(json.dumps(gh_call).encode())
+            write("chat/baseline.json", "[]")
+            assert run_hook(json.dumps(sending).encode())
+            sending["tool_input"]["text"] = "café " + ai
+            payload = json.dumps(sending, ensure_ascii=False).encode("utf-8").replace(b"caf", b"\xffcaf")
+            assert run_hook(payload)
+            for odd in (b"[]", b"null", b"{}", b'{"tool_input": 3, "tool_name": "Bash"}', b"bad json"):
+                assert run_hook(odd) == ""
+            write("baseline.json", "[]")
+            assert run_hook(json.dumps(git_call).encode())
+        with patch(__name__ + ".load", side_effect=RuntimeError("odd error")):
+            assert run_hook(b"{}") == ""
     sneaky = {"tool_name": "Bash", "tool_input": {"command": "cat <<EOF >/dev/null\nvoice-ok\nEOF\ngh pr comment 1 --body " + shlex.quote(ai)}}
     d = os.path.dirname(os.path.abspath(__file__))
     assert b("gh pr create --body-file voiceprint.py", cwd=d).startswith("#!/usr/bin/env python3")
@@ -326,6 +643,12 @@ def selftest():
     assert outgoing_text({"tool_name": "mcp__slack__search_messages", "tool_input": {"text": "q"}}) is None
     assert outgoing_text({"tool_name": "mcp__slack__reply_to_thread", "tool_input": {"text": "r"}}) == "r"
     assert outgoing_text({"tool_name": "mcp__slack__slack_send_message_draft", "tool_input": {"text": "d"}}) is None
+    for tool in ("slack_schedule_message", "slack_scheduled_messages_create", "chat_scheduleMessage",
+                 "slack_create_canvas", "slack_update_canvas", "canvases_create", "canvases_update",
+                 "conversations_add_message"):
+        key = "payload" if tool == "conversations_add_message" else "content"
+        assert outgoing_text({"tool_name": "mcp__slack__" + tool, "tool_input": {key: "new send"}}) == "new send", tool
+        assert outgoing_text({"tool_name": "mcp__slack__" + tool + "_draft", "tool_input": {key: "draft"}}) is None
     assert "voice-ok" not in strip_code("prose\n~~~\nvoice-ok\n~~~\nmore")
     assert PASTED.search("look at this\na = 1") and not PASTED.search("can you check the deploy, it looks stuck")
     call = {"tool_name": "Bash", "tool_input": {"command": "gh pr comment 1 --body " + shlex.quote(ai)}}
@@ -346,7 +669,7 @@ if __name__ == "__main__":
         b = build([p for p in a[1:] if p != "--lines"], "--lines" in a)
         print(json.dumps({k: v for k, v in b.items() if k != "tell_rates"}, indent=1))
     elif a[0] == "score":
-        t = sys.stdin.read() if len(a) < 2 or a[1] == "-" else open(a[1]).read()
+        t = score_input(a[1:])
         s, hits = score(t, load())
         print(json.dumps({"score": s, "hits": hits, "warn_at": (load() or {}).get("warn", 1.0)}))
     elif a[0] == "claude-prompts":
