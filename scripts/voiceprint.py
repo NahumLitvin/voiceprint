@@ -10,7 +10,7 @@
   voiceprint.py hook                      Claude Code PreToolUse hook (reads the tool call on stdin)
   voiceprint.py haiku install|remove [--voice TEXT] [--settings PATH]
                                           add or remove the optional Haiku prompt hooks (default ~/.claude/settings.json)
-  voiceprint.py haiku check FILE          ask Haiku if a long draft reads like your profile (exit 1 if not), e.g. before a blog release
+  voiceprint.py haiku check FILE          ask Haiku if a long draft reads like your profile (exit 1 if not, 2 if Haiku could not run)
   voiceprint.py selftest
 """
 import collections, glob, json, math, os, re, shlex, shutil, statistics, subprocess, sys
@@ -90,14 +90,19 @@ def score(text, base=None):
     extra = len(DASHES.findall(text)) - allowance((base or {}).get("rates", {}).get("dashes", 0), n)
     if extra > 0:
         hits["dashes"] = 2 * extra
-    if p90 := (base or {}).get("p90_sentence_words"):
-        sents = [len(words(s)) for s in re.split(r"(?<=[.!?])\s+|\n+", text) if words(s)]
-        extra = sum(l > p90 for l in sents) - 0.1 * len(sents)  # 10% of your own sentences run past your p90
-        if len(sents) >= 20 and extra > 0:  # short texts swing on one sentence
-            hits["long sentences"] = round(extra, 1)
     ranked = dict(sorted(hits.items(), key=lambda kv: -kv[1]))
     # top 3 per 100 words (floor 100): summing every hit measures length, not machine voice
     return round(100 * sum(list(ranked.values())[:3]) / max(n, 100), 2), ranked
+
+
+def rhythm(text, base):
+    """Points of sentences over your p90 length, beyond your own 10%. None under 20 sentences: one sentence swings it."""
+    p90 = (base or {}).get("p90_sentence_words")
+    prose = "\n".join(l for l in strip_code(text).splitlines() if not re.match(r"\s*([#|>*<+-]|\d+[.)]\s)", l))
+    sents = [len(words(s)) for s in re.split(r"(?<=[.!?])\s+|\n+", prose) if words(s)]
+    if not p90 or len(sents) < 20:
+        return None
+    return round(100 * sum(l > p90 for l in sents) / len(sents) - 10, 1)
 
 
 def unmark(text):
@@ -205,6 +210,8 @@ def build(paths, lines=False, recent=()):
     base["tell_rates"] = {t: r for t in list(TELLS) + list(base.get("drift", {})) if (r := per_k(count(t, low)))}
     own = [score(d, base)[0] for d in docs if len(words(strip_code(d))) >= MIN_WORDS]
     base["calibration_texts"] = len(own)
+    own_r = [r for d in docs if (r := rhythm(d, base)) is not None]
+    base["rhythm_warn"] = max(5.0, pct(own_r, 0.95)) if len(own_r) >= MIN_CALIBRATION else None
     base["warn"] = max(WARN_FLOOR, pct(own, 0.95)) if own else WARN_FLOOR
     base["deny"] = max(DENY_FLOOR, round(1.5 * pct(own, 0.99), 2)) if len(own) >= MIN_CALIBRATION else None
     if base["deny"] is None:
@@ -614,9 +621,18 @@ def haiku_check(text):
               "aphorisms, analogies, over-written lines, or anything the profile says they never do. Their short beats, questions they "
               "answer themselves, plain words and Hebrew are fine. Spelling must be right. The reason quotes up to 8 words from <draft>. "
               'Return only {"ok": true} or {"ok": false, "reason": "..."}.')
-    out = subprocess.run(["claude", "-p", "--model", "claude-haiku-5-5"], input=prompt, capture_output=True, text=True, timeout=180).stdout
-    m = re.search(r"\{.*\}", out, re.S)
-    return json.loads(m.group(0)) if m else {"ok": False, "reason": "no verdict from Haiku: " + out[:200]}
+    try:
+        p = subprocess.run(["claude", "-p", "--model", "claude-haiku-5-5"], input=prompt, capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"error": f"Haiku did not run: {e}"}
+    i = p.stdout.find("{")
+    try:
+        r = json.JSONDecoder().raw_decode(p.stdout[i:])[0] if p.returncode == 0 and i >= 0 else None
+    except ValueError:
+        r = None
+    if not isinstance(r, dict) or not isinstance(r.get("ok"), bool):
+        return {"error": "no verdict from Haiku: " + (p.stdout or p.stderr)[:200]}
+    return r
 
 
 def haiku(action, settings, voice="not given"):
@@ -900,9 +916,21 @@ def selftest():
     assert decide(dcall, {"warn": 50.0, "deny": None, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]["permissionDecision"] == "ask"
     assert decide(dcall, {"warn": 50.0, "deny": 3.0, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]["permissionDecision"] == "deny"
     long = "This sentence keeps going well past anything the author would ever type in one breath. "
-    assert "long sentences" in score(long * 25, {"p90_sentence_words": 5})[1]
-    assert "long sentences" not in score(long * 5, {"p90_sentence_words": 5})[1]
-    assert "long sentences" not in score("short one here. " * 25, {"p90_sentence_words": 5})[1]
+    p = {"p90_sentence_words": 5}
+    assert rhythm(long * 25, p) == 90 and rhythm(long * 5, p) is None and rhythm("short one here. " * 25, p) == -10
+    assert rhythm(("word " * 60 + ". ") * 25, p) == rhythm(("word " * 30 + ". ") * 25, p)
+    assert rhythm(("# " + long + "\n") * 25, p) is None
+    with tempfile.TemporaryDirectory() as td4, patch.dict(globals(), HOME=td4):
+        open(os.path.join(td4, "profile.md"), "w").write("short lines")
+        fake = lambda out, rc=0: patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], rc, out, ""))
+        with fake('{"ok": "false"}'):
+            assert "error" in haiku_check("x")
+        with fake('{"ok": false, "reason": "too smooth"} }'):
+            assert haiku_check("x") == {"ok": False, "reason": "too smooth"}
+        with fake('{"ok": true}', 1):
+            assert "error" in haiku_check("x")
+        with patch.object(subprocess, "run", side_effect=FileNotFoundError("claude")):
+            assert "error" in haiku_check("x")
     print("selftest ok")
 
 
@@ -916,16 +944,22 @@ if __name__ == "__main__":
         b = build([p for p in rest[:cut] if p != "--lines"], "--lines" in rest, [p for p in rest[cut + 1:] if p != "--lines"])
         print(json.dumps({k: v for k, v in b.items() if k != "tell_rates"}, indent=1, ensure_ascii=False))
     elif a[0] == "score":
-        rest = a[1:]
-        reg = rest[rest.index("--register") + 1] if "--register" in rest[:-1] else None
-        if "--register" in rest and reg not in ("long", "chat"):
+        rest, reg = a[1:], None
+        if "--register" in rest:
+            i = rest.index("--register")
+            reg = rest[i + 1] if i + 1 < len(rest) else None
+            if reg not in ("long", "chat"):
+                sys.exit("--register takes long or chat")
+            rest = rest[:i] + rest[i + 2:]
+        if len(rest) > 1 or "--register" in rest:
             sys.exit(__doc__)
-        rest = [x for x in rest if x not in ("--register", reg)]
         base = load(os.path.join(HOME, reg, "baseline.json")) if reg else load()
         if reg and not base:
             sys.exit(f"no {reg} baseline yet: run /voiceprint:voice-init")
-        s, hits = score(score_input(rest), base)
-        print(json.dumps({"score": s, "hits": hits, "warn_at": (base or {}).get("warn", WARN_FLOOR)}))
+        t = score_input(rest)
+        s, hits = score(t, base)
+        print(json.dumps({"score": s, "hits": hits, "warn_at": (base or {}).get("warn", WARN_FLOOR), "voice_ok": bool(ESCAPE.search(strip_code(t))),
+                          "rhythm": rhythm(t, base), "rhythm_warn": (base or {}).get("rhythm_warn")}))
     elif a[0] == "claude-prompts":
         seen = set()
         for p in claude_prompts():
@@ -937,7 +971,7 @@ if __name__ == "__main__":
     elif a[0] == "haiku" and a[1:2] == ["check"] and len(a) == 3:
         r = haiku_check(score_input(a[2:]))
         print(json.dumps(r, ensure_ascii=False))
-        sys.exit(0 if r.get("ok") else 1)
+        sys.exit(0 if r.get("ok") is True else 2 if "error" in r else 1)
     elif a[0] == "haiku":
         rest = a[2:]
         o = dict(zip(rest[::2], rest[1::2]))
