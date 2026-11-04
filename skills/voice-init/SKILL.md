@@ -57,6 +57,7 @@ Rules for every source:
 | X / Twitter | Their archive's `data/tweets.js`, without retweets |
 | Bluesky, Mastodon | Their public author feed through the site's API, paging with the cursor to the first post |
 | GitHub | PR bodies are often AI-written. Ask for a cutoff date before they used AI writing tools, then search all their PRs and issue comments with `gh`, year by year. Drop bot templates and templated bodies: mostly headings like `## Summary`, `## Test plan`, checkboxes or a tool's footer, even when old. Include only text they confirm they wrote |
+| Google Drive, OneDrive, Dropbox | Every account they ever had, personal and work: list documents they own (Docs, Slides, Word) by year with the connected tool or a CLI such as `gws`, export each as plain text (`text/plain`; convert Word files with `textutil` on macOS or `pandoc`). Drives hold far more than their writing, so show the titles by year and let them pick: drop other people's CVs, contracts, forms, course solutions and copied templates. A work drive often has only docs from after they joined; docs on shared drives belong to the drive, so ask for the folders they wrote in |
 | Notion | The connected tool, pages they created |
 | Telegram | Telegram Desktop, Export chat history, JSON; keep messages whose `from_id` is theirs, or use the MCP tool if connected |
 | Discord | Their data package, `messages/*/messages.json` |
