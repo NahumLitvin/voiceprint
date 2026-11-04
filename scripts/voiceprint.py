@@ -4,7 +4,8 @@
   voiceprint.py build PATH... [--lines] [--recent PATH...]
                                           fingerprint your writing into $VOICEPRINT_HOME (default ~/.voiceprint);
                                           --recent: your later, possibly AI-assisted text, to learn your own drift words
-  voiceprint.py score [FILE|-]            score a draft against your baseline
+  voiceprint.py score [FILE|-] [--register long|chat]
+                                          score a draft against your baseline, or the one for that register
   voiceprint.py claude-prompts            print what you typed to Claude Code, one prompt per line
   voiceprint.py hook                      Claude Code PreToolUse hook (reads the tool call on stdin)
   voiceprint.py haiku install|remove [--voice TEXT] [--settings PATH]
@@ -915,9 +916,16 @@ if __name__ == "__main__":
         b = build([p for p in rest[:cut] if p != "--lines"], "--lines" in rest, [p for p in rest[cut + 1:] if p != "--lines"])
         print(json.dumps({k: v for k, v in b.items() if k != "tell_rates"}, indent=1, ensure_ascii=False))
     elif a[0] == "score":
-        t = score_input(a[1:])
-        s, hits = score(t, load())
-        print(json.dumps({"score": s, "hits": hits, "warn_at": (load() or {}).get("warn", WARN_FLOOR)}))
+        rest = a[1:]
+        reg = rest[rest.index("--register") + 1] if "--register" in rest[:-1] else None
+        if "--register" in rest and reg not in ("long", "chat"):
+            sys.exit(__doc__)
+        rest = [x for x in rest if x not in ("--register", reg)]
+        base = load(os.path.join(HOME, reg, "baseline.json")) if reg else load()
+        if reg and not base:
+            sys.exit(f"no {reg} baseline yet: run /voiceprint:voice-init")
+        s, hits = score(score_input(rest), base)
+        print(json.dumps({"score": s, "hits": hits, "warn_at": (base or {}).get("warn", WARN_FLOOR)}))
     elif a[0] == "claude-prompts":
         seen = set()
         for p in claude_prompts():

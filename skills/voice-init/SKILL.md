@@ -67,7 +67,7 @@ Keep long form and chat in separate folders: they are different registers. Long-
 
 ## 2. Measure
 
-Use a separate top-level source folder for each register. Chat folder names are `claude` (Claude prompts), `slack`, `whatsapp`, `telegram` and `discord`. Build every other folder into the default baseline. This command discovers all source folders, including any long-form sources beyond posts and PRs:
+Use a separate top-level source folder for each register: chat, messages (email, PR bodies) and long form (docs, blog posts). They have different rhythms: a blog post runs longer sentences than an email, and an email longer than a chat line, so each is scored only against its own kind. Chat folder names are `claude` (Claude prompts), `slack`, `whatsapp`, `telegram` and `discord`. Long-form folder names are `drive`, `docs`, `posts`, `blog` and `articles`; they also build their own long-form baseline. Build every non-chat folder into the default baseline. This command discovers all source folders, including any long-form sources beyond posts and PRs:
 
 ```bash
 python3 - "${CLAUDE_PLUGIN_ROOT}" <<'PY'
@@ -79,19 +79,20 @@ import sys
 home = Path(os.path.expanduser(os.environ.get("VOICEPRINT_HOME") or "~/.voiceprint"))
 script = Path(sys.argv[1]) / "scripts" / "voiceprint.py"
 chat_names = {"claude", "claude-prompts", "slack", "whatsapp", "telegram", "discord"}
+long_names = {"drive", "docs", "posts", "blog", "articles"}
 folders = sorted(p for p in (home / "corpus").iterdir() if p.is_dir() and p.name != "recent")
 recent = home / "corpus" / "recent"
-for chat in (False, True):
-    sources = [str(p) for p in folders if (p.name.lower() in chat_names) == chat]
+for reg, names in (("", None), ("chat", chat_names), ("long", long_names)):
+    sources = [str(p) for p in folders if (p.name.lower() in names if names else p.name.lower() not in chat_names)]
     if sources:
-        env = dict(os.environ, VOICEPRINT_HOME=str(home / "chat" if chat else home))
-        extra = ["--lines"] if chat else (["--recent", str(recent)] if recent.is_dir() else [])
+        env = dict(os.environ, VOICEPRINT_HOME=str(home / reg))
+        extra = ["--lines"] if reg == "chat" else (["--recent", str(recent)] if not reg and recent.is_dir() else [])
         subprocess.run([sys.executable, str(script), "build", *sources] + extra,
                        env=env, check=True)
 PY
 ```
 
-The outputs are `${VOICEPRINT_HOME:-$HOME/.voiceprint}/baseline.json` for long form and `${VOICEPRINT_HOME:-$HOME/.voiceprint}/chat/baseline.json` for chat, built with `--lines`. Each measures sentence lengths, short-message share, dash, emoji, contraction and sign-off rates, which AI-tell words they actually use, and the warn and deny lines. Files over 5 MB are skipped with a warning. `.md`, `.txt` and `.markdown` extensions are case-insensitive. The builder also strips quoted replies and reply/forward tails.
+The outputs are `${VOICEPRINT_HOME:-$HOME/.voiceprint}/baseline.json` for messages, `${VOICEPRINT_HOME:-$HOME/.voiceprint}/chat/baseline.json` for chat, built with `--lines`, and `${VOICEPRINT_HOME:-$HOME/.voiceprint}/long/baseline.json` for long form. Score a blog post or doc with `score FILE --register long`. Drift is learned on the default baseline only: a few docs are too little earlier text, and ordinary words such as "before" would show up as drift. Each measures sentence lengths, short-message share, dash, emoji, contraction and sign-off rates, which AI-tell words they actually use, and the warn and deny lines. Files over 5 MB are skipped with a warning. `.md`, `.txt` and `.markdown` extensions are case-insensitive. The builder also strips quoted replies and reply/forward tails.
 
 Slack sends use the chat baseline when available, otherwise the default. GitHub and git sends use the default baseline.
 
