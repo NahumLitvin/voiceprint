@@ -6,7 +6,7 @@ description: Write in the user's own voice using the profile built by voice-init
 # voice
 
 1. Read `${VOICEPRINT_HOME:-$HOME/.voiceprint}/profile.md`, including its chat section. If it does not exist, say so and offer `/voiceprint:voice-init`. Do not invent a voice.
-2. Draft for the medium: chat follows the chat section (length, casing, typos left alone), long form follows the long-form one.
+2. Draft for the medium: chat follows the chat section (length, casing, slang), with correct spelling: the profile records typos, the draft never copies them, long form follows the long-form one.
 3. Score via stdin (use `python` where the commands say `python3` if only that exists), or a file under `${VOICEPRINT_HOME:-$HOME/.voiceprint}`. Never create a draft file in the user's repo:
 
 ```bash
