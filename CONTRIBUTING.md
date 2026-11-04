@@ -6,7 +6,7 @@ Bug reports, new sources for `/voiceprint:voice-init`, tell words and fixes are 
 
 | Path | What |
 |---|---|
-| `scripts/voiceprint.py` | Everything that runs: `build`, `score`, `claude-prompts`, `hook`, `selftest`. One file, standard library only, Python 3.8+ |
+| `scripts/voiceprint.py` | Everything that runs: `build`, `score`, `claude-prompts`, `hook`, `selftest`. One file, standard library only, Python 3.10+ |
 | `skills/voice-init/SKILL.md` | How Claude finds sources, asks, collects and writes the profile |
 | `skills/voice/SKILL.md` | How Claude drafts in the user's voice and scores the draft |
 | `hooks/hooks.json` | The PreToolUse hook registration |

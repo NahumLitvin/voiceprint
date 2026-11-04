@@ -45,7 +45,7 @@ python3 scripts/voiceprint.py score - < ~/.voiceprint/draft.md
 
 `build` writes only the measured baseline; the written profile comes from `/voiceprint:voice-init`. It accepts `.md`, `.txt` and `.markdown` in any casing, skips files over 5 MB, strips quoted replies and reply/forward tails, and warns for missing or empty source paths. An empty corpus or missing score file reports an error without a traceback. Use `--lines` for chat and set `VOICEPRINT_HOME` to your default home's `chat` subfolder when building or scoring that register. Keep draft files under your voiceprint home, or pipe text into `score -`.
 
-Python 3.8+, standard library only, macOS, Linux and Windows (the hook needs `python3` on PATH). `python3 scripts/voiceprint.py selftest` runs the checks.
+Python 3.10+, standard library only, macOS, Linux and Windows (the hook needs `python3` on PATH). `python3 scripts/voiceprint.py selftest` runs the checks.
 
 
 
