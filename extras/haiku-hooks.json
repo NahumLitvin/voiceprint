@@ -25,7 +25,7 @@
         ]
       },
       {
-        "matcher": "^(?!.*([_-]([Ss]earch|[Rr]ead|[Ll]ist|[Gg]et|[Hh]istory|[Ii]nfo|[Ll]ookup)|[Dd]raft))mcp__.*([Ss]lack|[Gg]mail|[Mm]ail|[Oo]utlook|[Ww]hats[Aa]pp|[Tt]elegram|[Ss]ignal|[Dd]iscord|[Tt]eams).*([Ss]end|[Pp]ost|[Rr]eply|[Uu]pdate|[Ee]dit|[Ss]chedule|[Cc]anvas|add_message)",
+        "matcher": "^(?!.*([_-]([Ss]earch|[Rr]ead|[Ll]ist|[Gg]et|[Hh]istory|[Ii]nfo|[Ll]ookup)|[Dd]raft))mcp__(.*([Ss]lack|[Gg]mail|[Mm]ail|[Oo]utlook|[Ww]hats[Aa]pp|[Tt]elegram|[Ss]ignal_|[Dd]iscord|[Tt]eams).*([Ss]end|[Pp]ost|[Rr]eply|[Uu]pdate|[Ee]dit|[Ss]chedule|[Cc]anvas|add_message)|.*([Ss]end|[Pp]ost|[Rr]eply)[_-].*([Ee]?[Mm]ail|[Mm]essage))",
         "hooks": [
           {
             "type": "prompt",

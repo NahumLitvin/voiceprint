@@ -593,13 +593,17 @@ def haiku(action, settings, voice="not given"):
     try:
         with open(settings, encoding="utf-8") as f:
             cur = json.load(f)
-        shutil.copyfile(settings, settings + ".bak")
     except FileNotFoundError:
+        if action == "remove":
+            return 0
         cur = {}
+    else:
+        shutil.copyfile(settings, settings + ".bak")
     hooks = cur.setdefault("hooks", {})
-    mine = lambda h: str(h.get("statusMessage", "")).startswith("voiceprint:")
-    pre = [dict(e, hooks=[h for h in e.get("hooks", []) if not mine(h)]) for e in hooks.get("PreToolUse", [])]
-    pre = [e for e in pre if e["hooks"]]
+    mine = lambda h: h.get("type") == "prompt" and h.get("statusMessage") == "voiceprint: Haiku reads the prose"
+    pre = [e if not any(mine(h) for h in e.get("hooks", [])) else dict(e, hooks=[h for h in e["hooks"] if not mine(h)])
+           for e in hooks.get("PreToolUse", [])]
+    pre = [e for e in pre if e.get("hooks") != []]
     if action == "install":
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "extras", "haiku-hooks.json"), encoding="utf-8") as f:
             add = json.load(f)["hooks"]["PreToolUse"]
@@ -610,7 +614,7 @@ def haiku(action, settings, voice="not given"):
     with open(settings, "w", encoding="utf-8") as f:  # in place, so a symlinked settings file stays a symlink
         json.dump(cur, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    return sum(len(e["hooks"]) for e in pre if any(mine(h) for h in e["hooks"]))
+    return sum(len(e["hooks"]) for e in pre if any(mine(h) for h in e.get("hooks", [])))
 
 
 def selftest():
@@ -814,7 +818,7 @@ def selftest():
     with tempfile.TemporaryDirectory() as td3:
         real, link = os.path.join(td3, "real.json"), os.path.join(td3, "settings.json")
         with open(real, "w") as f:
-            json.dump({"model": "m", "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "x"}]}]}}, f)
+            json.dump({"model": "m", "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "x", "statusMessage": "voiceprint: x"}]}]}}, f)
         try:
             os.symlink(real, link)
         except OSError:  # Windows without symlink rights
@@ -822,10 +826,23 @@ def selftest():
         for _ in range(2):
             assert haiku("install", link, "They don't use dashes.") == len(ex)
         s = json.load(open(link))
-        assert (link == real or os.path.islink(link)) and s["model"] == "m" and s["hooks"]["PreToolUse"][0]["hooks"] == [{"type": "command", "command": "x"}]
+        assert (link == real or os.path.islink(link)) and s["model"] == "m" and s["hooks"]["PreToolUse"][0]["hooks"] == [{"type": "command", "command": "x", "statusMessage": "voiceprint: x"}]
         assert "They don't use dashes." in json.dumps(s) and "VOICE_SUMMARY" not in json.dumps(s)
-        assert haiku("remove", link) == 0 and json.load(open(link))["hooks"]["PreToolUse"] == [{"matcher": "Bash", "hooks": [{"type": "command", "command": "x"}]}]
+        assert haiku("remove", link) == 0 and json.load(open(link))["hooks"]["PreToolUse"] == [{"matcher": "Bash", "hooks": [{"type": "command", "command": "x", "statusMessage": "voiceprint: x"}]}]
         assert haiku("install", os.path.join(td3, "new.json")) == len(ex)
+        os.remove(link + ".bak")
+        os.mkdir(link + ".bak")
+        try:
+            haiku("install", link)
+            raise AssertionError("a failed backup must abort the write")
+        except OSError:
+            assert json.load(open(real))["model"] == "m"
+        bare = os.path.join(td3, "bare.json")
+        with open(bare, "w") as f:
+            json.dump({"hooks": {"PreToolUse": [{"matcher": "Bash"}]}}, f)
+        haiku("install", bare)
+        assert haiku("remove", bare) == 0 and json.load(open(bare))["hooks"]["PreToolUse"] == [{"matcher": "Bash"}]
+        assert haiku("remove", os.path.join(td3, "none.json")) == 0 and not os.path.exists(os.path.join(td3, "none.json"))
     with tempfile.TemporaryDirectory() as td2:
         open(os.path.join(td2, "a.md"), "w", encoding="utf-8").write("שלום. Hello there? ok")
         with patch.dict(globals(), HOME=td2, BASELINE=os.path.join(td2, "baseline.json")):
@@ -876,9 +893,14 @@ if __name__ == "__main__":
                 print(p)
     elif a[0] == "hook":
         hook()
-    elif a[0] == "haiku" and a[1:2] in (["install"], ["remove"]):
-        opt = lambda k, d: a[a.index(k) + 1] if k in a[:-1] else d
-        n = haiku(a[1], os.path.expanduser(opt("--settings", "~/.claude/settings.json")), opt("--voice", "not given"))
+    elif a[0] == "haiku":
+        rest = a[2:]
+        o = dict(zip(rest[::2], rest[1::2]))
+        if a[1:2] not in (["install"], ["remove"]) or len(rest) % 2 or set(o) - {"--voice", "--settings"} or any(v.startswith("--") for v in o.values()):
+            sys.exit(__doc__)
+        n = haiku(a[1], os.path.expanduser(o.get("--settings", "~/.claude/settings.json")), o.get("--voice", "not given"))
         print(f"voiceprint Haiku hooks in settings: {n}")
     elif a[0] == "selftest":
         selftest()
+    else:
+        sys.exit(__doc__)
