@@ -18,4 +18,4 @@ The hook is a best-effort writing check, not a security boundary: it reads comma
 
 ## Supported versions
 
-Only the latest release gets fixes. Update with `claude plugin marketplace update voiceprint && claude plugin update voiceprint@voiceprint`.
+Only the latest commit on `main` gets fixes. Update with `claude plugin marketplace update voiceprint && claude plugin update voiceprint@voiceprint`.

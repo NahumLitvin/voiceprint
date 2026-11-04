@@ -70,14 +70,14 @@ Keep long form and chat in separate folders: they are different registers. Long-
 Use a separate top-level source folder for each register. Chat folder names are `claude` (Claude prompts), `slack`, `whatsapp`, `telegram` and `discord`. Build every other folder into the default baseline. This command discovers all source folders, including any long-form sources beyond posts and PRs:
 
 ```bash
-python3 - <<'PY'
+python3 - "${CLAUDE_PLUGIN_ROOT}" <<'PY'
 import os
 from pathlib import Path
 import subprocess
 import sys
 
 home = Path(os.path.expanduser(os.environ.get("VOICEPRINT_HOME") or "~/.voiceprint"))
-script = Path("${CLAUDE_PLUGIN_ROOT}") / "scripts" / "voiceprint.py"
+script = Path(sys.argv[1]) / "scripts" / "voiceprint.py"
 chat_names = {"claude", "claude-prompts", "slack", "whatsapp", "telegram", "discord"}
 folders = sorted(p for p in (home / "corpus").iterdir() if p.is_dir() and p.name != "recent")
 recent = home / "corpus" / "recent"

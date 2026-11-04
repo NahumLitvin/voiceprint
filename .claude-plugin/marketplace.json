@@ -7,7 +7,6 @@
       "name": "voiceprint",
       "source": "./",
       "description": "Build your own writing voice from your own posts and messages, and a prose guard that flags text that doesn't sound like you.",
-      "version": "0.1.0",
       "category": "productivity",
       "tags": ["writing", "voice", "style"]
     }

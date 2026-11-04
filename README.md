@@ -10,6 +10,10 @@ Your voice stays yours: the corpus, profile and baseline are stored in `~/.voice
 claude plugin marketplace add NahumLitvin/voiceprint && claude plugin install voiceprint@voiceprint
 ```
 
+Needs Python 3.10+ as `python3` or `python` (check with `python3 --version`). On Windows, use Git Bash or PowerShell 7. The hook is live in new sessions right after install; until you run `/voiceprint:voice-init` it scores against general limits. Updates follow `main`: `claude plugin marketplace update voiceprint && claude plugin update voiceprint@voiceprint`.
+
+To pause the hook, `export VOICEPRINT_MODE=off`. To turn off the hook and the skills, `claude plugin disable voiceprint@voiceprint`.
+
 ## Use
 
 | Command | What it does |
@@ -24,17 +28,17 @@ It looks for words and phrases that mark machine-written English: the 2023 vocab
 
 Long form uses `VOICEPRINT_HOME/baseline.json`; chat uses `VOICEPRINT_HOME/chat/baseline.json`. Slack sends use the chat baseline when valid, falling back to the default. GitHub and git use the default. The shared `profile.md` contains both registers.
 
-By default the hook asks you, with the score and the words, before the send runs. To block sends over the deny line instead (needs 5+ calibration texts of 25+ words), or to only tell Claude without asking:
+By default the hook asks you, with the score and the words, before the send runs. To block sends over the deny line instead (needs 5+ calibration texts of 25+ words; it then also blocks any dash if you never use dashes), or to only tell Claude without asking:
 
 ```bash
-export VOICEPRINT_MODE=deny   # or: note
+export VOICEPRINT_MODE=deny   # or: note, off
 ```
 
-You can add `voice-ok` to a text, outside code, to let it through when a flagged term is needed. Claude is asked to rewrite flagged words in your voice; if a term is needed, it leaves it for you to approve. Texts under 25 words and code blocks are skipped. Mode comes only from `VOICEPRINT_MODE`, defaulting to `ask`.
+You can add `voice-ok` to a text, outside code, to let it through when a flagged term is needed. Claude is asked to rewrite flagged words in your voice; if a term is needed, it leaves it for you to approve. Texts under 25 words and code blocks are skipped. Mode comes only from `VOICEPRINT_MODE`: `ask` (default), `deny`, `note` or `off`.
 
 The hook reads UTF-8, replacing invalid bytes. Invalid baselines are ignored; unexpected hook errors produce no output. Shell commands over 200,000 characters are skipped.
 
-The hook is a writing check, not a security boundary. It reads the command as text and never runs it, so a body that comes from a shell variable, a wrapper such as `timeout`, or `gh api` is not seen, and neither are `gh pr merge --body`, `git tag -m` or `git merge -m`. Use `/voiceprint:voice` for anything you paste yourself.
+The hook is a writing check, not a security boundary. It reads the command as text and never runs it, so a body that comes from a shell variable, a wrapper such as `timeout` or `sudo`, or `gh api` is not seen, and neither are `gh pr merge --body`, `git tag -m` or `git merge -m`. Use `/voiceprint:voice` for anything you paste yourself.
 
 ## Without Claude Code
 
@@ -45,7 +49,7 @@ python3 scripts/voiceprint.py score - < ~/.voiceprint/draft.md
 
 `build` writes only the measured baseline; the written profile comes from `/voiceprint:voice-init`. It accepts `.md`, `.txt` and `.markdown` in any casing, skips files over 5 MB, strips quoted replies and reply/forward tails, and warns for missing or empty source paths. An empty corpus or missing score file reports an error without a traceback. Use `--lines` for chat and set `VOICEPRINT_HOME` to your default home's `chat` subfolder when building or scoring that register. Keep draft files under your voiceprint home, or pipe text into `score -`.
 
-Python 3.10+, standard library only, macOS, Linux and Windows (the hook needs `python3` on PATH). `python3 scripts/voiceprint.py selftest` runs the checks.
+Python 3.10+, standard library only, macOS, Linux and Windows. `python3 scripts/voiceprint.py selftest` runs the checks.
 
 
 

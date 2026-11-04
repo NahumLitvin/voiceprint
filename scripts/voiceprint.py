@@ -234,7 +234,9 @@ HARNESS = re.compile(r"skill instructions were previously loaded|response above 
 def claude_prompts(root="~/.claude/projects"):
     """What the user typed to Claude Code, minus what looks pasted (code, multi-line blocks, long walls of text)."""
     for f in sorted(glob.glob(os.path.join(os.path.expanduser(root), "*", "*.jsonl"))):
-        for line in open(f, encoding="utf-8", errors="replace"):
+        with open(f, encoding="utf-8", errors="replace") as source:
+            lines = list(source)
+        for line in lines:
             try:
                 e = json.loads(line)
             except ValueError:
@@ -437,6 +439,8 @@ def bash_parts(cmd, cwd, written=None, depth=0):
                     files.append(stdin)
                 elif not t.startswith("-"):
                     files.append(fetch(t, here))
+                if sum(map(len, files)) >= MAX_FILE:
+                    break
             if files:
                 output = "".join(files)[:MAX_FILE]
         if prog in ("echo", "printf"):
@@ -557,6 +561,8 @@ def decide_text(text, base, mode):
 
 def hook():
     try:
+        if os.environ.get("VOICEPRINT_MODE") == "off":
+            return
         call = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace"))
         base = load()
         if "slack" in call.get("tool_name", "").lower():
@@ -714,6 +720,7 @@ def selftest():
             sending = {"tool_name": "mcp__slack__chat_post_message", "tool_input": {"text": ai}}
             assert json.loads(run_hook(json.dumps(sending).encode()))["hookSpecificOutput"]["permissionDecision"] == "ask"
             assert json.loads(run_hook(json.dumps(sending).encode(), "deny"))["hookSpecificOutput"]["permissionDecision"] == "deny"
+            assert run_hook(json.dumps(sending).encode(), "off") == ""
             assert "additionalContext" in json.loads(run_hook(json.dumps(sending).encode(), "note"))["hookSpecificOutput"]
             assert run_hook(json.dumps(sending).encode())
             os.mkdir(os.path.join(td, "chat"))
@@ -790,6 +797,8 @@ def selftest():
         assert b("cd /tmp  # go\ngit commit -m hello", cwd=td2) == "hello"
         assert b("echo https://x.io/a#frag && git commit -m hi", cwd=td2) == "hi"
         assert b("git commit -m 'a # b'", cwd=td2) == "a # b"
+        with patch.dict(globals(), MAX_FILE=1000):
+            assert len(b("cat " + "body.txt " * 5000 + "| gh pr comment 1 --body-file -", cwd=td2)) <= 1000
         if hasattr(os, "mkfifo"):
             os.mkfifo(os.path.join(td2, "fifo"))
             assert b("gh pr comment 1 --body-file fifo", cwd=td2) is None

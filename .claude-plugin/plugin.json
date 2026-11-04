@@ -1,6 +1,5 @@
 {
   "name": "voiceprint",
-  "version": "0.1.0",
   "description": "Build your own writing voice from your own posts and messages, and a prose guard that flags text that doesn't sound like you.",
   "author": { "name": "Nahum Litvin", "url": "https://github.com/NahumLitvin" },
   "homepage": "https://github.com/NahumLitvin/voiceprint",
