@@ -112,6 +112,12 @@ Show the profile to the user and fix what they say is wrong. Their correction be
 
 Then ask before deleting the inbox copies and any decrypted databases, as promised in step 1.
 
+Last, offer the optional Haiku check: prompt hooks that block forced analogies, aphorisms, rhetorical openers and empty closing questions, which the word list can't see. Each matched send costs one Haiku call and up to 25 seconds. Only on a yes, back up and merge it, then show them the added entries:
+
+```bash
+f=~/.claude/settings.json; cp "$f" "$f.bak" && jq -s '.[0].hooks.PreToolUse += .[1].hooks.PreToolUse | .[0]' "$f" "${CLAUDE_PLUGIN_ROOT}/extras/haiku-hooks.json" > "$f.new" && mv "$f.new" "$f"
+```
+
 ## 4. Refresh
 
 Rerun step 2 when they publish more. The guard reads the new baseline at once.

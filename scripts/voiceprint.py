@@ -779,6 +779,8 @@ def selftest():
     assert DASHES.findall("13:00 – 15:00 and 3–5") == [] and DASHES.findall("well – no") == ["–"]
     assert unmark("see <https://x.io/a|the doc> <@U123> <https://x.io>") == "see the doc    "
     assert EMOJI.findall("nice :tada: ok") == [":tada:"]
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "extras", "haiku-hooks.json"), encoding="utf-8") as f:
+        assert all(h["type"] == "prompt" and "$ARGUMENTS" in h["prompt"] for e in json.load(f)["hooks"]["PreToolUse"] for h in e["hooks"])
     with tempfile.TemporaryDirectory() as td2:
         open(os.path.join(td2, "a.md"), "w", encoding="utf-8").write("שלום. Hello there? ok")
         with patch.dict(globals(), HOME=td2, BASELINE=os.path.join(td2, "baseline.json")):

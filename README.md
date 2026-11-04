@@ -40,6 +40,16 @@ The hook reads UTF-8, replacing invalid bytes. Invalid baselines are ignored; un
 
 The hook is a writing check, not a security boundary. It reads the command as text and never runs it, so a body that comes from a shell variable, a wrapper such as `timeout` or `sudo`, or `gh api` is not seen, and neither are `gh pr merge --body`, `git tag -m` or `git merge -m`. Use `/voiceprint:voice` for anything you paste yourself.
 
+## Optional: a Haiku check
+
+A word list can't see a forced analogy, an aphorism, a rhetorical opener or a "What do you think?" closer. `extras/haiku-hooks.json` adds Claude Code prompt hooks that ask Claude Haiku to read the same sends (`gh` PR, issue, release and API writes, `git commit`, chat and mail send tools) and block those patterns. It is off by default: each matched send costs one Haiku call and can add up to 25 seconds. `/voiceprint:voice-init` offers to add it, or merge it yourself (backs up your settings first):
+
+```bash
+f=~/.claude/settings.json; cp "$f" "$f.bak" && curl -fsSL https://raw.githubusercontent.com/NahumLitvin/voiceprint/main/extras/haiku-hooks.json | jq -s '.[0].hooks.PreToolUse += .[1].hooks.PreToolUse | .[0]' "$f" - > "$f.new" && mv "$f.new" "$f"
+```
+
+Haiku sees the command, not files, so a body passed with `--body-file` or `git commit -F` passes unread. To remove it, restore `~/.claude/settings.json.bak` or delete the entries whose `statusMessage` starts with `voiceprint:`.
+
 ## Without Claude Code
 
 ```bash
