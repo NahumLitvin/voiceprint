@@ -112,12 +112,15 @@ Show the profile to the user and fix what they say is wrong. Their correction be
 
 Then ask before deleting the inbox copies and any decrypted databases, as promised in step 1.
 
-Last, offer the optional Haiku check: prompt hooks that block forced analogies, aphorisms, rhetorical openers, empty closing questions, misspellings and anything the profile says they never do, which the word list can't see. A prompt hook can't read files, so write a voice summary of 60 words or less from the profile, as plain sentences such as "They avoid em dashes" (rhythm, words they use, what they never do; no lists, quoted phrases or names, which Haiku can mistake for the text it judges) and show it to them first. Each matched send costs one Haiku call and up to 25 seconds. Only on a yes, back up and merge it, then show them the added entries:
+Last, offer the optional Haiku check: prompt hooks that block forced analogies, aphorisms, rhetorical openers, empty closing questions, misspellings and anything the profile says they never do, which the word list can't see. It costs one Haiku call, usually a few seconds and at most 25, on every `gh` and `git` command and chat or mail send. A prompt hook can't read files, so write a voice summary of 60 words or less from the profile, as plain sentences such as "They avoid em dashes" (rhythm, words they use, what they never do; no lists, quoted phrases or names, which Haiku can mistake for the text it judges), and show it to them. Only on a yes:
 
 ```bash
-f=~/.claude/settings.json; cp "$f" "$f.bak" && jq -s --arg v '<the summary>' '.[1] |= ((.. | objects | select(has("prompt")) | .prompt) |= sub("VOICE_SUMMARY"; $v)) | .[0].hooks.PreToolUse += .[1].hooks.PreToolUse | .[0]' "$f" "${CLAUDE_PLUGIN_ROOT}/extras/haiku-hooks.json" > "$f.new" && mv "$f.new" "$f"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" haiku install --voice "$(cat <<'VOICE'
+<the summary>
+VOICE
+)"
 ```
 
 ## 4. Refresh
 
-Rerun step 2 when they publish more. The guard reads the new baseline at once. If the profile changed and they use the Haiku check, remove the entries whose `statusMessage` starts with `voiceprint:` and merge again with a new summary.
+Rerun step 2 when they publish more. The guard reads the new baseline at once. If the profile changed and they use the Haiku check, run `haiku install` again with a new summary; it replaces the old entries.

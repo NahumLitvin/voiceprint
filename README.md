@@ -42,13 +42,13 @@ The hook is a writing check, not a security boundary. It reads the command as te
 
 ## Optional: a Haiku check
 
-A word list can't see a forced analogy, an aphorism, a rhetorical opener, a "What do you think?" closer, a misspelled word or a line that just isn't you. `extras/haiku-hooks.json` adds Claude Code prompt hooks that ask Claude Haiku to read the same sends (`gh` PR, issue and release sends, `gh api` body fields, `git commit`, chat and mail send tools) and block those patterns, judged against a short summary of your voice so the text sounds like you on a good day. It is off by default: each matched send costs one Haiku call and can add up to 25 seconds. `/voiceprint:voice-init` offers to add it, or merge it yourself without a voice summary (backs up your settings first):
+A word list can't see a forced analogy, an aphorism, a rhetorical opener, a "What do you think?" closer, a misspelled word or a line that just isn't you. `extras/haiku-hooks.json` adds Claude Code prompt hooks that ask Claude Haiku to read what's about to go out and block those patterns, judged against a short summary of your voice so the text sounds like you on a good day. It runs on every `gh` and `git` command and on chat and mail send tools; reads pass. That is one Haiku call, usually a few seconds and at most 25, per `gh` or `git` command, so it is off by default. `/voiceprint:voice-init` offers to add it with your voice summary, or from a clone:
 
 ```bash
-f=~/.claude/settings.json; cp "$f" "$f.bak" && curl -fsSL https://raw.githubusercontent.com/NahumLitvin/voiceprint/main/extras/haiku-hooks.json | jq -s --arg v 'not given' '.[1] |= ((.. | objects | select(has("prompt")) | .prompt) |= sub("VOICE_SUMMARY"; $v)) | .[0].hooks.PreToolUse += .[1].hooks.PreToolUse | .[0]' "$f" - > "$f.new" && mv "$f.new" "$f"
+python3 scripts/voiceprint.py haiku install --voice "They write short lowercase sentences and never use em dashes."
 ```
 
-Haiku sees the command, not files, so a body passed with `--body-file` or `git commit -F` passes unread. To remove it, restore `~/.claude/settings.json.bak` or delete the entries whose `statusMessage` starts with `voiceprint:`.
+Running it again replaces the entries instead of adding more, and it backs up your settings to `settings.json.bak` first. `python3 scripts/voiceprint.py haiku remove` takes them out. Haiku sees the command, not files, so a body passed with `--body-file` or `git commit -F` passes unread.
 
 ## Without Claude Code
 

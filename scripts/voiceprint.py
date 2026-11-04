@@ -7,9 +7,11 @@
   voiceprint.py score [FILE|-]            score a draft against your baseline
   voiceprint.py claude-prompts            print what you typed to Claude Code, one prompt per line
   voiceprint.py hook                      Claude Code PreToolUse hook (reads the tool call on stdin)
+  voiceprint.py haiku install|remove [--voice TEXT] [--settings PATH]
+                                          add or remove the optional Haiku prompt hooks (default ~/.claude/settings.json)
   voiceprint.py selftest
 """
-import collections, glob, json, math, os, re, shlex, statistics, sys
+import collections, glob, json, math, os, re, shlex, shutil, statistics, sys
 from collections import deque
 
 HOME = os.path.expanduser(os.environ.get("VOICEPRINT_HOME", "~/.voiceprint"))
@@ -29,6 +31,7 @@ streamline foster harness unlock landscape ecosystem paradigm pivotal crucial in
 meticulously underscore underscores showcase showcasing testament realm embark elevate empower holistic synergy
 invaluable notably moreover furthermore additionally ultimately essentially fundamentally vibrant transformative
 resonate resonates captivating endeavor plethora myriad multifaceted noteworthy groundbreaking interplay
+spearhead spearheaded spearheading
 """.split()}
 # 2025-26 register: words that suddenly spread in AI-written PR text (louisabraham.github.io/load-bearing).
 # Several are plain English, so density matters more than any one hit, and your own usage raises your allowance.
@@ -585,6 +588,31 @@ def score_input(args):
         sys.exit("cannot read draft: " + str(e))
 
 
+def haiku(action, settings, voice="not given"):
+    """Add or remove the optional Haiku prompt hooks in a Claude Code settings file."""
+    try:
+        with open(settings, encoding="utf-8") as f:
+            cur = json.load(f)
+        shutil.copyfile(settings, settings + ".bak")
+    except FileNotFoundError:
+        cur = {}
+    hooks = cur.setdefault("hooks", {})
+    mine = lambda h: str(h.get("statusMessage", "")).startswith("voiceprint:")
+    pre = [dict(e, hooks=[h for h in e.get("hooks", []) if not mine(h)]) for e in hooks.get("PreToolUse", [])]
+    pre = [e for e in pre if e["hooks"]]
+    if action == "install":
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "extras", "haiku-hooks.json"), encoding="utf-8") as f:
+            add = json.load(f)["hooks"]["PreToolUse"]
+        for h in (h for e in add for h in e["hooks"]):
+            h["prompt"] = h["prompt"].replace("VOICE_SUMMARY", voice)
+        pre += add
+    hooks["PreToolUse"] = pre
+    with open(settings, "w", encoding="utf-8") as f:  # in place, so a symlinked settings file stays a symlink
+        json.dump(cur, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    return sum(len(e["hooks"]) for e in pre if any(mine(h) for h in e["hooks"]))
+
+
 def selftest():
     ai = ("We will delve into a robust and seamless ecosystem — it's not just a tool, it plays a crucial role. "
           "Moreover, this comprehensive paradigm will ultimately unlock a vibrant landscape for every team today.")
@@ -780,7 +808,24 @@ def selftest():
     assert unmark("see <https://x.io/a|the doc> <@U123> <https://x.io>") == "see the doc    "
     assert EMOJI.findall("nice :tada: ok") == [":tada:"]
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "extras", "haiku-hooks.json"), encoding="utf-8") as f:
-        assert all(h["type"] == "prompt" and "$ARGUMENTS" in h["prompt"] for e in json.load(f)["hooks"]["PreToolUse"] for h in e["hooks"])
+        ex = [h for e in json.load(f)["hooks"]["PreToolUse"] for h in e["hooks"]]
+    assert all(h["type"] == "prompt" and "$ARGUMENTS" in h["prompt"] and "VOICE_SUMMARY" in h["prompt"] for h in ex)
+    assert len({h["prompt"] for h in ex}) == 1
+    with tempfile.TemporaryDirectory() as td3:
+        real, link = os.path.join(td3, "real.json"), os.path.join(td3, "settings.json")
+        with open(real, "w") as f:
+            json.dump({"model": "m", "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "x"}]}]}}, f)
+        try:
+            os.symlink(real, link)
+        except OSError:  # Windows without symlink rights
+            link = real
+        for _ in range(2):
+            assert haiku("install", link, "They don't use dashes.") == len(ex)
+        s = json.load(open(link))
+        assert (link == real or os.path.islink(link)) and s["model"] == "m" and s["hooks"]["PreToolUse"][0]["hooks"] == [{"type": "command", "command": "x"}]
+        assert "They don't use dashes." in json.dumps(s) and "VOICE_SUMMARY" not in json.dumps(s)
+        assert haiku("remove", link) == 0 and json.load(open(link))["hooks"]["PreToolUse"] == [{"matcher": "Bash", "hooks": [{"type": "command", "command": "x"}]}]
+        assert haiku("install", os.path.join(td3, "new.json")) == len(ex)
     with tempfile.TemporaryDirectory() as td2:
         open(os.path.join(td2, "a.md"), "w", encoding="utf-8").write("שלום. Hello there? ok")
         with patch.dict(globals(), HOME=td2, BASELINE=os.path.join(td2, "baseline.json")):
@@ -831,5 +876,9 @@ if __name__ == "__main__":
                 print(p)
     elif a[0] == "hook":
         hook()
+    elif a[0] == "haiku" and a[1:2] in (["install"], ["remove"]):
+        opt = lambda k, d: a[a.index(k) + 1] if k in a[:-1] else d
+        n = haiku(a[1], os.path.expanduser(opt("--settings", "~/.claude/settings.json")), opt("--voice", "not given"))
+        print(f"voiceprint Haiku hooks in settings: {n}")
     elif a[0] == "selftest":
         selftest()
