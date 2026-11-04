@@ -17,6 +17,22 @@ The more of their own writing, and the older, the better: old text shows the voi
 
 **Collect all of it.** Page until the source is empty, not until you have "enough". Where an API caps results per query (Slack search, Gmail), split by date (month by month, then year by year) back to the oldest message. Include replies: thread replies, email answers, comments. When a source's history ends, say whether that is where their writing starts or where the tool stops (a free Slack plan hides old messages, an MCP only holds what it synced), and offer the full export for the rest.
 
+**Get the older history.** For each source, compare the oldest message of *theirs* it holds with when they really started using it (ask: "you've had WhatsApp since about when?"). Count only their own messages: a database can hold years of empty or system rows. If years are missing, tell them it exists only somewhere you cannot reach, give the exact steps below for their device, and ask them to put the files in `${VOICEPRINT_HOME:-$HOME/.voiceprint}/inbox/`. Read the files from there and delete each one once its text is saved to the corpus, since an export holds other people's messages too. Do not try to reach old history by scrolling or exporting from a desktop or web app: they only hold what synced since they were linked.
+
+| Source | Steps for the user |
+|---|---|
+| WhatsApp, iPhone, all chats | Connect the iPhone to the Mac, open it in Finder, General, uncheck "Encrypt local backup", Back Up Now (an encrypted one needs decrypting first). Then you read `ChatStorage.sqlite` from the backup, see the table below |
+| WhatsApp, iPhone or Android, one chat | On the phone: open the chat, tap its name (Android: menu, More), Export chat, Without media, send it to the computer (AirDrop, email to self, Drive). Do it for their 5 to 10 busiest chats. Android's own backup is encrypted, so this is the way there |
+| Slack | Older than 90 days on a free plan is hidden: only an upgrade brings it back. A workspace admin can export public channels; on paid plans the owner can export DMs |
+| Gmail | takeout.google.com, select only Mail, a `.mbox` of everything back to the account's start |
+| LinkedIn | Settings, Data privacy, Get a copy of your data, "the works" (takes about a day) |
+| Facebook, Instagram | Accounts Center, Your information, Download your information, JSON |
+| X / Twitter | Settings, Your account, Download an archive of your data |
+| Reddit | reddit.com/settings/data-request (the API stops at about 1,000 items) |
+| Telegram | Telegram Desktop, Settings, Advanced, Export Telegram data, JSON |
+| Discord | Settings, Data & Privacy, Request all of my data |
+| Old blogs, school or university work | Old laptops, external drives, Google Drive and Dropbox: search for `.doc`, `.docx` and `.pdf` they wrote; convert to text before saving |
+
 **Preview.** Before measuring, show a few lines from each source and each era so they can drop what isn't theirs (quotes, forwarded mail, pasted AI text, secrets).
 
 Rules for every source:
@@ -29,7 +45,8 @@ Rules for every source:
 |---|---|
 | Claude Code prompts | `mkdir -p "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus/claude" && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/voiceprint.py" claude-prompts > "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus/claude/prompts.txt"` (their most casual register; the collector drops prompts that look pasted, such as code, quotes, long lines and multi-line blocks, but not all of them, so preview it) |
 | Past sessions | If a session-search CLI like `recall` is installed, search their own messages with it |
-| WhatsApp, full history | The phone holds every year; desktop apps only hold what synced since they were linked. On iPhone, make a Finder backup of the phone (unencrypted, or decrypt it), find `ChatStorage.sqlite` (domain `AppDomainGroup-group.net.whatsapp.WhatsApp.shared` in the backup's `Manifest.db`) and read it read-only: `sqlite3 "file:<path>?mode=ro" "select strftime('%Y', ZMESSAGEDATE + 978307200, 'unixepoch'), replace(ZTEXT, char(10), ' ') from ZWAMESSAGE where ZISFROMME = 1 and ZTEXT is not null"`, one file per year. The Mac app keeps the same database at `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite`; check its oldest `ZISFROMME = 1` date before relying on it. On Android the local backup is encrypted, so use Export chat per chat (without media) for their busiest chats |
+| WhatsApp backup | Find `ChatStorage.sqlite` in the iPhone backup (`~/Library/Application Support/MobileSync/Backup/<id>/`; its `Manifest.db` maps domain `AppDomainGroup-group.net.whatsapp.WhatsApp.shared` to the file) and read it read-only: `sqlite3 "file:<path>?mode=ro" "select strftime('%Y', ZMESSAGEDATE + 978307200, 'unixepoch'), replace(ZTEXT, char(10), ' ') from ZWAMESSAGE where ZISFROMME = 1 and ZTEXT is not null"`, one file per year. The Mac app keeps the same database at `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite`, but only from when it was linked |
+| WhatsApp export `.txt` | Lines look like `[12/03/2019, 13:15:38] Name: text`; a line without that prefix continues the previous message. Keep only messages whose sender is their own name, drop `omitted` media lines, file them by year |
 | WhatsApp, recent | The MCP tool if connected; keep only their lines |
 | Slack | Search `from:me` with the connected tool, one month per query from today back to the workspace start, paging every month to the end; search results include thread replies. A workspace export has everything if they are an admin |
 | Gmail and other email | All sent mail: `in:sent` with the connected tool or `gws`, one year per query back to the account's first message, or a Google Takeout mbox. Strip quoted replies and forwarded text, then preview |
