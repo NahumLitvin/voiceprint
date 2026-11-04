@@ -767,7 +767,7 @@ def selftest():
     d = drift_words(before, recent)
     assert "nothing" in d and "fixed" not in d and "the" not in d, d
     assert score("nothing " * 30, {"drift": {"nothing": 16.0}})[0] >= 20
-    assert strip_replies("thanks!\nOn Mon, Jan 3, 2022 at 10:00 Pat <p@x.com>\nwrote:\n> old") == "thanks!"
+    assert strip_replies("thanks!\nOn Mon, Jan 3, 2022 at 10:00 Pat <p@example.invalid>\nwrote:\n> old") == "thanks!"
     assert DASHES.findall("13:00 – 15:00 and 3–5") == [] and DASHES.findall("well – no") == ["–"]
     assert unmark("see <https://x.io/a|the doc> <@U123> <https://x.io>") == "see the doc    "
     assert EMOJI.findall("nice :tada: ok") == [":tada:"]

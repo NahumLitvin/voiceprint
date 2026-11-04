@@ -8,7 +8,7 @@ Please report it privately: [open a security advisory](https://github.com/NahumL
 
 voiceprint reads the writing you give it and every Bash or Slack tool call Claude is about to make. A vulnerability is anything that turns either of those into more than a local score, for example:
 
-- your corpus, profile or baseline leaving your machine, or landing in a repo, a log or a tool call
+- your corpus, profile or baseline leaving your machine, or landing in a repo, a log or a tool call, beyond the samples you approve Claude reading while it builds your profile
 - the hook reading a file the command did not name, or reading outside the size limit
 - the hook running, evaluating or expanding any part of the command it inspects
 - crafted command text or a crafted baseline making the hook crash or hang in a way that blocks every call
