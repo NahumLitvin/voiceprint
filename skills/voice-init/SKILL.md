@@ -22,7 +22,7 @@ The more of their own writing, and the older, the better: old text shows the voi
 | Source | Steps for the user |
 |---|---|
 | WhatsApp, iPhone, all chats | Connect the iPhone to the Mac, open it in Finder, General, uncheck "Encrypt local backup", Back Up Now (an encrypted one needs decrypting first). Then you read `ChatStorage.sqlite` from the backup, see the table below |
-| WhatsApp, iPhone or Android, one chat | On the phone: open the chat, tap its name (Android: menu, More), Export chat, Without media, send it to the computer (AirDrop, email to self, Drive). Do it for their 5 to 10 busiest chats. Android's own backup is encrypted, so this is the way there |
+| WhatsApp, iPhone or Android, one chat | On the phone: open the chat, tap its name (Android: menu, More), Export chat, Without media, send it to the computer (AirDrop, email to self, or Drive: saving to a Drive folder lets you fetch every export with the Drive tool, no cable). Do it for their 5 to 10 busiest chats. Android's own backup is encrypted, so this is the way there. For every chat at once on Android: turn on end-to-end encrypted backup with the 64-digit key, copy `Android/media/com.whatsapp/WhatsApp/Databases/msgstore.db.crypt15` off the phone over USB, and decrypt it with an open-source tool such as wa-crypt-tools |
 | Slack | Older than 90 days on a free plan is hidden: only an upgrade brings it back. A workspace admin can export public channels; on paid plans the owner can export DMs |
 | Gmail | takeout.google.com, select only Mail, a `.mbox` of everything back to the account's start |
 | LinkedIn | Settings, Data privacy, Get a copy of your data, "the works" (takes about a day) |
