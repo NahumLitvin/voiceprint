@@ -540,6 +540,7 @@ def decide(call, base, mode):
 
 
 def decide_text(text, base, mode):
+    text = (text or "")[:MAX_COMMAND]
     if not text or ESCAPE.search(strip_code(text)) or len(words(strip_code(text))) < MIN_WORDS:
         return None
     s, hits = score(text, base)

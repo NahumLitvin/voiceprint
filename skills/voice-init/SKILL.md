@@ -5,7 +5,7 @@ description: Build the user's own writing voice from their own publications and 
 
 # voice-init
 
-Builds the user's voice from text they wrote. Files are stored in `${VOICEPRINT_HOME:-$HOME/.voiceprint}`. Never upload, commit or quote the corpus anywhere else. Tell the user up front that samples you read pass through this conversation, then start with `mkdir -p "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus"`.
+Builds the user's voice from text they wrote. Where a command says `python3` and only `python` exists, use `python`. Files are stored in `${VOICEPRINT_HOME:-$HOME/.voiceprint}`. Never upload, commit or quote the corpus anywhere else. Tell the user up front that samples you read pass through this conversation, then start with `mkdir -p "${VOICEPRINT_HOME:-$HOME/.voiceprint}/corpus"`.
 
 ## 1. Find sources, ask, then collect everything
 
