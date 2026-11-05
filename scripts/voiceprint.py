@@ -46,7 +46,7 @@ TELLS.update({p: 2 for p in [
     "at its core", "serves as a", "plays a crucial role", "i hope this helps", "great question", "game-changer",
     "cutting-edge", "let's explore", "in the realm of", "here's the thing", "the bottom line",
 ]})
-DASHES = re.compile(r"—|(?<!\d)(?<!\d )–(?! ?\d)| -- ")
+DASHES = re.compile(r"—|(?<!\d)(?<!\d )–(?! ?\d)| -- (?!-)")
 EMOJI = re.compile(r"[\U0001F300-\U0001FAFF☀-➿]|:[a-z0-9_+-]{2,30}:")
 DRIFT_MIN_WORDS = 5000
 SIGNOFF = re.compile(r"^(thanks|thank you|best|regards|cheers|sincerely|warmly)\b[^\n]{0,30}$", re.I | re.M)
@@ -855,6 +855,7 @@ def selftest():
     assert score("nothing " * 30, {"drift": {"nothing": 16.0}})[0] >= 20
     assert strip_replies("thanks!\nOn Mon, Jan 3, 2022 at 10:00 Pat <p@example.invalid>\nwrote:\n> old") == "thanks!"
     assert DASHES.findall("13:00 – 15:00 and 3–5") == [] and DASHES.findall("well – no") == ["–"]
+    assert DASHES.findall("atlantis plan -d live/x -- -target=module.y") == [] and DASHES.findall("works -- mostly") == [" -- "]
     assert unmark("see <https://x.io/a|the doc> <@U123> <https://x.io>") == "see the doc    "
     assert EMOJI.findall("nice :tada: ok") == [":tada:"]
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "extras", "haiku-hooks.json"), encoding="utf-8") as f:
