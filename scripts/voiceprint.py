@@ -566,6 +566,8 @@ def decide_text(text, base, mode):
     dash_rule = "dashes" in hits and (base is None or (isinstance(rates, dict) and rates.get("dashes", 0) < 0.1))
     if s < warn and not dash_rule:
         return None
+    if mode != "deny" and not dash_rule and all(h in (base or {}).get("drift", {}) for h in hits):
+        mode = "note"
     msg = (f"voiceprint: this text scores {s} (your own writing stays under {warn}). Over your usual rate: "
            f"{', '.join(list(hits)[:5])}{' (you never use dashes)' if dash_rule else ''}. Rewrite the listed words in the user's voice. If a term is truly needed, leave it and let the user approve the prompt.")
     if not base:
@@ -853,6 +855,10 @@ def selftest():
     d = drift_words(before, recent)
     assert "nothing" in d and "fixed" not in d and "the" not in d, d
     assert score("nothing " * 30, {"drift": {"nothing": 16.0}})[0] >= 20
+    drcall = {"tool_name": "Bash", "tool_input": {"command": "gh pr create --body " + shlex.quote("fails rule step " + "word " * 97)}}
+    assert "permissionDecision" not in decide(drcall, {"warn": 2.0, "deny": 3.0, "drift": {"fails": 50.0, "rule": 50.0, "step": 50.0}}, "ask")["hookSpecificOutput"]
+    drcall["tool_input"]["command"] = "gh pr create --body " + shlex.quote("fails delve step " + "word " * 97)
+    assert decide(drcall, {"warn": 2.0, "deny": 3.0, "drift": {"fails": 50.0, "step": 50.0}}, "ask")["hookSpecificOutput"]["permissionDecision"] == "ask", "a real tell still asks"
     assert strip_replies("thanks!\nOn Mon, Jan 3, 2022 at 10:00 Pat <p@example.invalid>\nwrote:\n> old") == "thanks!"
     assert DASHES.findall("13:00 – 15:00 and 3–5") == [] and DASHES.findall("well – no") == ["–"]
     assert DASHES.findall("atlantis plan -d live/x -- -target=module.y") == [] and DASHES.findall("works -- mostly") == [" -- "]
