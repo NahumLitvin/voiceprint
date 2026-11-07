@@ -215,7 +215,7 @@ def build(paths, lines=False, recent=()):
     base["warn"] = max(WARN_FLOOR, pct(own, 0.95)) if own else WARN_FLOOR
     base["deny"] = max(DENY_FLOOR, round(1.5 * pct(own, 0.99), 2)) if len(own) >= MIN_CALIBRATION else None
     if base["deny"] is None:
-        base["note"] = f"deny mode needs {MIN_CALIBRATION}+ texts of {MIN_WORDS}+ words; the guard will only ask"
+        base["note"] = f"deny mode needs {MIN_CALIBRATION}+ texts of {MIN_WORDS}+ words; the guard will only tell Claude"
     os.makedirs(HOME, exist_ok=True)
     with open(BASELINE, "w", encoding="utf-8", errors="replace") as target:
         json.dump(base, target, indent=1)
@@ -566,6 +566,8 @@ def decide_text(text, base, mode):
     dash_rule = "dashes" in hits and (base is None or (isinstance(rates, dict) and rates.get("dashes", 0) < 0.1))
     if s < warn and not dash_rule:
         return None
+    if mode != "deny" and not dash_rule and all(h in (base or {}).get("drift", {}) for h in hits):
+        mode = "note"
     msg = (f"voiceprint: this text scores {s} (your own writing stays under {warn}). Over your usual rate: "
            f"{', '.join(list(hits)[:5])}{' (you never use dashes)' if dash_rule else ''}. Rewrite the listed words in the user's voice. If a term is truly needed, leave it and let the user approve the prompt.")
     if not base:
@@ -573,6 +575,8 @@ def decide_text(text, base, mode):
     if mode == "note":
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}
     deny = mode == "deny" and base and base.get("deny") and (dash_rule or s >= base["deny"])
+    if mode == "deny" and not deny:
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny" if deny else "ask",
                                    "permissionDecisionReason": msg}}
 
@@ -853,6 +857,10 @@ def selftest():
     d = drift_words(before, recent)
     assert "nothing" in d and "fixed" not in d and "the" not in d, d
     assert score("nothing " * 30, {"drift": {"nothing": 16.0}})[0] >= 20
+    drcall = {"tool_name": "Bash", "tool_input": {"command": "gh pr create --body " + shlex.quote("fails rule step " + "word " * 97)}}
+    assert "permissionDecision" not in decide(drcall, {"warn": 2.0, "deny": 3.0, "drift": {"fails": 50.0, "rule": 50.0, "step": 50.0}}, "ask")["hookSpecificOutput"]
+    drcall["tool_input"]["command"] = "gh pr create --body " + shlex.quote("fails delve step " + "word " * 97)
+    assert decide(drcall, {"warn": 2.0, "deny": 3.0, "drift": {"fails": 50.0, "step": 50.0}}, "ask")["hookSpecificOutput"]["permissionDecision"] == "ask", "a real tell still asks"
     assert strip_replies("thanks!\nOn Mon, Jan 3, 2022 at 10:00 Pat <p@example.invalid>\nwrote:\n> old") == "thanks!"
     assert DASHES.findall("13:00 – 15:00 and 3–5") == [] and DASHES.findall("well – no") == ["–"]
     assert DASHES.findall("atlantis plan -d live/x -- -target=module.y") == [] and DASHES.findall("works -- mostly") == [" -- "]
@@ -914,7 +922,7 @@ def selftest():
         if hasattr(os, "mkfifo"):
             os.mkfifo(os.path.join(td2, "fifo"))
             assert b("gh pr comment 1 --body-file fifo", cwd=td2) is None
-    assert decide(dcall, {"warn": 50.0, "deny": None, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert "permissionDecision" not in decide(dcall, {"warn": 50.0, "deny": None, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]
     assert decide(dcall, {"warn": 50.0, "deny": 3.0, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]["permissionDecision"] == "deny"
     long = "This sentence keeps going well past anything the author would ever type in one breath. "
     p = {"p90_sentence_words": 5}
