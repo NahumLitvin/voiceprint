@@ -28,7 +28,7 @@ It looks for words and phrases that mark machine-written English: the 2023 vocab
 
 Long form uses `VOICEPRINT_HOME/baseline.json`; chat uses `VOICEPRINT_HOME/chat/baseline.json`. Slack sends use the chat baseline when valid, falling back to the default. GitHub and git use the default. The shared `profile.md` contains both registers.
 
-By default the hook asks you, with the score and the words, before the send runs. To block sends over the deny line instead (needs 5+ calibration texts of 25+ words; it then also blocks any dash if you never use dashes), or to only tell Claude without asking:
+By default the hook asks you, with the score and the words, before the send runs. To never be asked, set deny: a send over the deny line is blocked with the words listed and Claude rewrites (needs 5+ calibration texts of 25+ words; any dash is blocked too if you never use dashes), and a send in the warn band only tells Claude, so the optional Haiku hook decides whether the prose is fine. Or set note to only tell Claude:
 
 ```bash
 export VOICEPRINT_MODE=deny   # or: note, off

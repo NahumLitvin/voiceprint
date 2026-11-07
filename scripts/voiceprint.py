@@ -215,7 +215,7 @@ def build(paths, lines=False, recent=()):
     base["warn"] = max(WARN_FLOOR, pct(own, 0.95)) if own else WARN_FLOOR
     base["deny"] = max(DENY_FLOOR, round(1.5 * pct(own, 0.99), 2)) if len(own) >= MIN_CALIBRATION else None
     if base["deny"] is None:
-        base["note"] = f"deny mode needs {MIN_CALIBRATION}+ texts of {MIN_WORDS}+ words; the guard will only ask"
+        base["note"] = f"deny mode needs {MIN_CALIBRATION}+ texts of {MIN_WORDS}+ words; the guard will only tell Claude"
     os.makedirs(HOME, exist_ok=True)
     with open(BASELINE, "w", encoding="utf-8", errors="replace") as target:
         json.dump(base, target, indent=1)
@@ -575,6 +575,8 @@ def decide_text(text, base, mode):
     if mode == "note":
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}
     deny = mode == "deny" and base and base.get("deny") and (dash_rule or s >= base["deny"])
+    if mode == "deny" and not deny:
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny" if deny else "ask",
                                    "permissionDecisionReason": msg}}
 
@@ -920,7 +922,7 @@ def selftest():
         if hasattr(os, "mkfifo"):
             os.mkfifo(os.path.join(td2, "fifo"))
             assert b("gh pr comment 1 --body-file fifo", cwd=td2) is None
-    assert decide(dcall, {"warn": 50.0, "deny": None, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert "permissionDecision" not in decide(dcall, {"warn": 50.0, "deny": None, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]
     assert decide(dcall, {"warn": 50.0, "deny": 3.0, "rates": {"dashes": 0.0}}, "deny")["hookSpecificOutput"]["permissionDecision"] == "deny"
     long = "This sentence keeps going well past anything the author would ever type in one breath. "
     p = {"p90_sentence_words": 5}
